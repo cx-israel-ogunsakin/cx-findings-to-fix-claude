@@ -1,0 +1,108 @@
+# Findings-to-Fix: how it works
+
+Findings-to-Fix lets a developer fix confirmed Checkmarx One security findings
+from inside their editor or terminal using GitHub Copilot or Claude Code. Checkmarx generates the fix on the
+platform; the plugin brings it into the editor as a change the developer
+reviews and keeps or undoes. This document describes the pieces, the sequence,
+and the boundaries.
+
+## The pieces
+
+**On the Checkmarx One platform**
+
+- Scans run on each push or pull request, triggered from the customer's CI/CD
+  pipeline against the code in Bitbucket.
+- AI Auto Triage runs automatically when a scan completes. It reviews critical
+  and high findings, marks true positives **Confirmed**, and marks noise
+  **Proposed Not Exploitable**. Nothing in the plugin changes these verdicts.
+- Remediation Assist generates a code fix for a finding on request: the changed
+  files as diffs, a short explanation (what, why, how), and unit tests that
+  exercise the fix.
+- The Checkmarx One REST API is how the plugin reaches all of the above.
+
+**On the developer's machine**
+
+- GitHub Copilot Chat in VS Code, or Claude Code (in a terminal or through its
+  VS Code and JetBrains extensions). The plugin supports both from one
+  repository.
+- The Findings-to-Fix plugin, installed once from a Git repository. For
+  Copilot it provides a chat agent named Findings-to-Fix and a skill with the
+  same instructions for the default agent. For Claude Code it provides the
+  `/cx-findings-to-fix:cx-findings-to-fix` command and a subagent. Both hosts
+  share one small tool (`ftf`, shipped in both Python and Node so either
+  runtime works) that talks to the Checkmarx API.
+- The developer's Checkmarx One API key, stored in their shell profile or in
+  the Checkmarx `cx` CLI configuration. The tool exchanges it for a short-lived
+  token in memory. The key never appears in the assistant's conversation.
+
+## The sequence
+
+1. **The developer asks.** In Copilot Chat, with the Findings-to-Fix agent
+   selected (or the default agent, which recognises the request), the developer
+   types "fix my confirmed findings". In Claude Code, the developer runs the
+   `/cx-findings-to-fix:cx-findings-to-fix` command.
+2. **The assistant runs the tool.** The tool reads the project's git remote and
+   current branch and looks the project up in Checkmarx One. If the name does
+   not match a project, or the branch has no completed scan, the tool returns
+   the closest projects or the branches that have scans, the assistant shows
+   them as a numbered list, and the developer picks. The tool never guesses.
+3. **The tool fetches the fixes.** It lists the findings on the latest
+   completed scan that are Confirmed at critical or high severity, sends them
+   to Remediation Assist in one request, and waits for each fix in parallel.
+   Fresh fixes take two to three minutes; fixes that already exist come back
+   in seconds. The result is a manifest: per finding, the changed files as
+   diffs, the explanation, and the generated tests.
+4. **The assistant shows the findings** as a table and asks which to apply.
+5. **The tool computes each fix against the developer's current files**
+   without writing anything. For each changed file it produces the complete
+   new content, or reports that the local file has changed since the scan so
+   the exact diff no longer fits.
+6. **The assistant proposes each fix as an edit.** In Copilot the changed file
+   opens in VS Code with the change shown as a diff and Keep and Undo
+   controls. In Claude Code the edit is shown as a diff to accept or reject.
+   The developer decides file by file. This is the same whether the project is a
+   git clone or a plain folder.
+7. **Files that changed since the scan** are handled differently: the
+   assistant reads the intended change and the current file, makes the same change where
+   the code now lives, keeps the developer's other edits, and says plainly that
+   this fix was placed by hand and deserves a closer look. It never
+   overwrites a whole file on its own.
+8. **The assistant explains** each fix (what, why, how) and names the tests
+   Remediation Assist generated.
+9. **The assistant offers to run those tests** and does so only if the developer says
+   yes.
+10. **The developer commits as usual.** The plugin never commits or pushes.
+
+## Where the credential goes and does not go
+
+| Credential | Lives | Used by | Never reaches |
+|---|---|---|---|
+| Checkmarx One API key | shell profile or `cx` CLI config on the workstation | the `ftf` tool, which exchanges it for a short-lived token in memory | the assistant's conversation, GitHub, Anthropic |
+| GitHub Copilot session | VS Code's GitHub sign-in | Copilot | Checkmarx |
+| Claude Code session | Claude Code's sign-in | Claude Code | Checkmarx |
+| CI/CD credential that triggers scans | the CI/CD system | the pipeline | the developer's machine |
+
+## What can and cannot happen
+
+- The plugin reads findings and fetches fixes. It cannot change a finding's
+  state, trigger a scan, or touch Checkmarx configuration.
+- Every change to code arrives as an editor edit the developer accepts. The
+  tool writes nothing into the project on its own during the normal flow.
+- The plugin never commits or pushes.
+- Only Confirmed critical and high findings are considered. Package (SCA)
+  fixes are supported and off by default.
+- Nothing runs on a server. Nothing is installed besides the plugin folder.
+
+## Rolling out to a team
+
+Host the plugin repository somewhere developers can reach. For Copilot, each
+developer installs it once with **Chat: Install Plugin From Source** and the
+repository URL; with Copilot Business or Enterprise, an administrator can
+instead add the repository to `managed-settings.json` (`extraKnownMarketplaces`
+and `enabledPlugins`) so it installs for everyone. For Claude Code, each
+developer adds the repository as a marketplace and installs from it
+(`claude plugin marketplace add`, `claude plugin install`).
+
+Per developer, one time: an API key, and Python 3 or Node on the machine.
+Copilot's terminal tool, or Claude Code's Bash tool, must be allowed by the
+organisation's policy; that is how the plugin runs.
