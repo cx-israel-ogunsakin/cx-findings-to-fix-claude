@@ -1,0 +1,15 @@
+{
+  "description": "Advisory only: on session start, print a one-line reminder that Findings-to-Fix is available and warn if no Checkmarx One API key is configured. Never blocks.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/check-auth.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}

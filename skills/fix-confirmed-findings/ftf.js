@@ -1,0 +1,460 @@
+#!/usr/bin/env node
+/**
+ * Findings-to-Fix (ftf): pull Triage Assist CONFIRMED findings from Checkmarx One and
+ * fetch platform-generated fixes from the Remediation Assist Agent API.
+ *
+ * Zero dependencies (Node 18+). Same behavior and same JSON output as ftf.py.
+ *
+ * Subcommands
+ *   resolve   [--project NAME] [--branch NAME]
+ *   remediate --scan-id ID [--severity A B] [--engine sast sca] [--out DIR]
+ *   apply     [--manifest FILE] [--only 0,2] [--repo-root DIR]
+ *   run       [resolve args] [remediate args]
+ *
+ * Auth: CX_APIKEY env var, or the cx CLI config (~/.checkmarx/checkmarxcli.yaml).
+ * stdout: one JSON document. stderr: progress.
+ */
+"use strict";
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const zlib = require("zlib");
+const { spawnSync } = require("child_process");
+
+const USER_AGENT = "cx-findings-to-fix/0.1";
+const POLL_INITIAL = 10_000, POLL_MAX = 30_000, POLL_TIMEOUT = 900_000, MAX_WORKERS = 8, HTTP_TIMEOUT = 60_000;
+const FILE_MODE = 0o600;   // owner read/write only: patches and manifests carry tenant source code
+const DIR_MODE = 0o700;
+const HOME = path.normalize(path.resolve(os.homedir()));
+const CWD = path.normalize(path.resolve(process.cwd()));
+
+// ---------------------------------------------------------------- utilities
+const log = (m) => process.stderr.write(`[ftf] ${m}\n`);
+const emit = (o) => process.stdout.write(JSON.stringify(o, null, 2) + "\n");
+function die(code, message, extra = {}) { emit({ ok: false, error: code, message, ...extra }); process.exit(1); }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const b64json = (seg) => JSON.parse(Buffer.from(seg.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
+
+function containedPath(candidate, ...roots) {
+  const dest = path.normalize(path.resolve(candidate));
+  for (const r of roots) {
+    const root = path.normalize(path.resolve(r));
+    const rel = path.relative(root, dest);
+    if (rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))) return dest;
+  }
+  throw new Error(`refusing path outside allowed roots: ${dest}`);
+}
+const readText = (p, roots) => fs.readFileSync(containedPath(p, ...roots), "utf8");
+function writeWithMode(p, roots, data) {
+  // Open with an explicit owner-only mode and write through the descriptor.
+  const fd = fs.openSync(containedPath(p, ...roots), "w", FILE_MODE);
+  try { fs.writeSync(fd, data); fs.fchmodSync(fd, FILE_MODE); } finally { fs.closeSync(fd); }
+}
+const writeText = (p, roots, t) => writeWithMode(p, roots, Buffer.from(t, "utf8"));
+const writeBytes = (p, roots, b) => writeWithMode(p, roots, b);
+const mkdirp = (p) => fs.mkdirSync(p, { recursive: true, mode: DIR_MODE });
+
+async function httpRead(url, { method = "GET", body, headers = {}, timeout = HTTP_TIMEOUT } = {}) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), timeout);
+  try {
+    const res = await fetch(url, { method, body, headers: { "User-Agent": USER_AGENT, ...headers }, signal: ctl.signal });
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status} from ${new URL(url).pathname}: ${buf.subarray(0, 200).toString()}`);
+    return { status: res.status, body: buf };
+  } finally { clearTimeout(t); }
+}
+
+// ---------------------------------------------------------------- auth
+const KEY_LINE = /^\s*(cx_apikey|apikey|cx-apikey)\s*:\s*['"]?([A-Za-z0-9\-_.]{40,})['"]?\s*$/i;
+function findApiKeyInCxConfig() {
+  const cfg = path.join(HOME, ".checkmarx", "checkmarxcli.yaml");
+  if (!fs.existsSync(cfg)) return null;
+  for (const line of readText(cfg, [HOME]).split(/\r?\n/)) { const m = KEY_LINE.exec(line); if (m) return m[2]; }
+  return null;
+}
+
+class CxClient {
+  static async create() {
+    const c = new CxClient();
+    const apikey = process.env.CX_APIKEY || findApiKeyInCxConfig();
+    if (!apikey) die("no_credential", "No Checkmarx One API key found. Set CX_APIKEY or run: cx configure set --prop-name cx_apikey --prop-value <key>");
+    let iss;
+    try { iss = b64json(apikey.split(".")[1]).iss; } catch (e) { log(`credential is not a JWT: ${e.message}`); die("bad_credential", "CX_APIKEY does not look like a Checkmarx One API key (expected a JWT)."); }
+    const form = new URLSearchParams({ grant_type: "refresh_token", client_id: "ast-app", refresh_token: apikey }).toString();
+    let tok;
+    try {
+      const { body } = await httpRead(`${iss}/protocol/openid-connect/token`, { method: "POST", body: form, headers: { "Content-Type": "application/x-www-form-urlencoded" }, timeout: 30_000 });
+      tok = JSON.parse(body.toString()).access_token;
+    } catch (e) { log(`token exchange failed: ${e.message}`); die("auth_failed", "Token exchange failed. The API key may be revoked or expired."); }
+    const claims = b64json(tok.split(".")[1]);
+    c.base = process.env.CX_BASE_URL || claims["ast-base-url"];
+    if (!c.base) die("no_base_url", "Could not determine the Checkmarx One base URL; set CX_BASE_URL.");
+    c.tenant = claims.tenant_name || claims.azp || "?";
+    c.headers = { Authorization: `Bearer ${tok}`, Accept: "application/json; version=1.0", "Content-Type": "application/json", "User-Agent": USER_AGENT };
+    return c;
+  }
+  async call(method, p, body) {
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), HTTP_TIMEOUT);
+    try {
+      const res = await fetch(this.base + p, { method, headers: this.headers, body: body === undefined ? undefined : JSON.stringify(body), signal: ctl.signal });
+      const raw = await res.text();
+      let parsed = {};
+      try { parsed = raw ? JSON.parse(raw) : {}; } catch (e) { log(`non-JSON response (HTTP ${res.status}) from ${p}: ${e.message}`); parsed = { message: raw.slice(0, 300) }; }
+      return [res.status, parsed];
+    } catch (e) {
+      log(`request failed ${method} ${p}: ${e.message}`);
+      return [0, { message: e.message }];
+    } finally { clearTimeout(t); }
+  }
+  get(p) { return this.call("GET", p); }
+}
+
+// ---------------------------------------------------------------- git helpers
+function git(...args) {
+  try {
+    const r = spawnSync("git", args, { encoding: "utf8", timeout: 10_000 });
+    if (r.error) { log(`git ${args.join(" ")} failed: ${r.error.message}`); return ""; }
+    return r.status === 0 ? r.stdout.trim() : "";
+  } catch (e) { log(`git ${args.join(" ")} failed: ${e.message}`); return ""; }
+}
+function localRepoGuess() {
+  const url = git("remote", "get-url", "origin");
+  const branch = git("rev-parse", "--abbrev-ref", "HEAD");
+  const repo_root = git("rev-parse", "--show-toplevel");
+  if (!url) return { remote_url: "", repo: "", parent: "", branch, repo_root };
+  const parts = url.replace(/\/+$/, "").replace(/\.git$/, "").split(/[/:]/);
+  return { remote_url: url, repo: parts[parts.length - 1] || "", parent: parts.length > 1 ? parts[parts.length - 2] : "", branch, repo_root };
+}
+
+// ---------------------------------------------------------------- resolve
+async function exactProject(cx, name) {
+  const [st, body] = await cx.get(`/api/projects?name=${encodeURIComponent(name)}&limit=5`);
+  if (st !== 200) return null;
+  return (body.projects || []).find((p) => p.name === name) || null;
+}
+async function cmdResolve(cx, project, branch, quiet = false) {
+  const guess = localRepoGuess();
+  const result = { ok: true, local: guess, tenant: cx.tenant, base_url: cx.base };
+  const names = project ? [project] : [guess.parent && guess.repo ? `${guess.parent}/${guess.repo}` : null, guess.repo || null].filter(Boolean);
+  const tried = []; let proj = null;
+  for (const cand of names) { tried.push(cand); proj = await exactProject(cx, cand); if (proj) break; }
+  if (!proj) {
+    const needle = project || guess.repo || ""; let near = [];
+    if (needle) { const [st, body] = await cx.get(`/api/projects?name-regex=${encodeURIComponent(needle)}&limit=10`); if (st === 200) near = (body.projects || []).map((p) => ({ name: p.name, id: p.id })); }
+    Object.assign(result, { resolved: false, reason: "project_not_found", tried, candidates: near, next: "Ask the developer for the exact Checkmarx One project name (pick from candidates if listed) and rerun with --project." });
+    if (!quiet) emit(result); return result;
+  }
+  branch = branch || guess.branch;
+  const [stB, branchesRaw] = await cx.get(`/api/projects/branches?project-id=${proj.id}&limit=50`);
+  const branches = stB === 200 && Array.isArray(branchesRaw) ? branchesRaw : [];
+  const [stS, scans] = await cx.get(`/api/scans?project-id=${proj.id}&branch=${encodeURIComponent(branch)}&statuses=Completed&limit=1&sort=-created_at`);
+  const scan = stS === 200 ? (scans.scans || [])[0] : null;
+  Object.assign(result, { project: { name: proj.name, id: proj.id }, branch, branches_with_scans: branches });
+  if (!scan) { Object.assign(result, { resolved: false, reason: "no_completed_scan_on_branch", next: "Ask the developer which branch to use (see branches_with_scans) and rerun with --branch." }); if (!quiet) emit(result); return result; }
+  Object.assign(result, { resolved: true, scan: { id: scan.id, created_at: scan.createdAt, engines: scan.engines, source_origin: scan.sourceOrigin } });
+  if (!quiet) emit(result); return result;
+}
+
+// ---------------------------------------------------------------- findings + remediation
+async function listConfirmed(cx, scanId, severities, engines) {
+  const findings = []; let offset = 0; const page = 100;
+  for (;;) {
+    const qs = new URLSearchParams([["scan-id", scanId], ["limit", String(page)], ["offset", String(offset)], ["state", "CONFIRMED"], ...severities.map((s) => ["severity", s])]);
+    const [st, body] = await cx.get(`/api/results/?${qs}`);
+    if (st !== 200) die("results_failed", `/api/results returned HTTP ${st}: ${body.message}`);
+    const batch = body.results || [];
+    for (const r of batch) {
+      const eng = (r.type || "").toLowerCase(); if (engines.length && !engines.includes(eng)) continue;
+      const d = r.data || {}; const node = (d.nodes || [{}])[0] || {}; const vd = r.vulnerabilityDetails || {};
+      findings.push({ alternate_id: r.alternateId || r.id, display_id: r.id, similarity_id: r.similarityId, engine: eng, severity: r.severity, state: r.state, status: r.status,
+        query: d.queryName || vd.cveName || "", file: node.fileName || "", line: node.line, package: d.packageIdentifier, recommended_version: d.recommendedVersion, cwe: vd.cweId });
+    }
+    const total = body.totalCount || 0; offset += batch.length;
+    if (!batch.length || offset >= total) break;
+  }
+  return findings;
+}
+async function initiate(cx, scanId, findings) {
+  const buckets = {}; for (const f of findings) (buckets[f.engine] ||= []).push(f.alternate_id);
+  const payload = { scanID: scanId, buckets: Object.entries(buckets).filter(([e]) => e === "sast" || e === "sca").map(([scannerType, resultIDs]) => ({ scannerType, resultIDs })) };
+  if (!payload.buckets.length) return { submitted: 0 };
+  const [st, body] = await cx.call("POST", "/api/remediation/remediate", payload);
+  if (st !== 202) die("remediate_failed", `POST /api/remediation/remediate returned HTTP ${st}: ${body.message || JSON.stringify(body)}`, { hint: "HTTP 402/403 usually means Remediation Assist is not enabled or licensed for this tenant." });
+  return { submitted: payload.buckets.reduce((n, b) => n + b.resultIDs.length, 0), job_id: body.remediationJobId, published: body.published, existing_state: body.existingState };
+}
+async function pollOne(cx, scanId, f) {
+  const p = `/api/remediation/remediation-details/${scanId}/${encodeURIComponent(f.alternate_id)}`;
+  const t0 = Date.now(); let delay = POLL_INITIAL;
+  for (;;) {
+    const [st, body] = await cx.get(p);
+    const res = (body && body.results && body.results[0]) || {};
+    const elapsed = Math.round((Date.now() - t0) / 1000);
+    if (st === 200 && res.data) {
+      const data = res.data;
+      return { ...f, status: data.error ? "FAILED" : "READY", error: data.error || undefined, summary: data.summary, analysis: data.analysis || {}, pr_title: data.pr_title,
+        file_changes: (data.file_changes || []).map((c) => ({ file_path: c.file_path, diff: c.diff, note: c.analysis })),
+        tests: (((data.test_creation || {}).test_files) || []).map((t) => ({ file_path: t.file_path, framework: t.framework_used })),
+        zip_url: (res.autoPr || {}).file_url, elapsed_s: elapsed };
+    }
+    if (res.jobStatus === "FAILED") return { ...f, status: "FAILED", error: "remediation job failed", elapsed_s: elapsed };
+    if (st !== 200 && st !== 404) return { ...f, status: "FAILED", error: `HTTP ${st}: ${body.message}`, elapsed_s: elapsed };
+    if (Date.now() - t0 > POLL_TIMEOUT) return { ...f, status: "TIMEOUT", error: `no result after ${POLL_TIMEOUT / 1000}s`, elapsed_s: elapsed };
+    await sleep(delay); delay = Math.min(POLL_MAX, delay + 5_000);
+  }
+}
+async function runPool(items, worker, size) {
+  const out = []; let i = 0;
+  await Promise.all(Array.from({ length: Math.min(size, items.length) }, async () => { while (i < items.length) { const it = items[i++]; out.push(await worker(it)); } }));
+  return out;
+}
+async function cmdRemediate(cx, scanId, severities, engines, outDir, quiet = false, meta = {}) {
+  log(`listing CONFIRMED findings for scan ${scanId.slice(0, 8)}… (severity=${severities.join(",")}; engines=${engines.join(",") || "all"})`);
+  const findings = await listConfirmed(cx, scanId, severities, engines);
+  log(`${findings.length} confirmed finding(s)`);
+  const manifest = { ok: true, scan_id: scanId, tenant: cx.tenant, base_url: cx.base, repo_root: git("rev-parse", "--show-toplevel") || CWD, filters: { state: ["CONFIRMED"], severity: severities, engines }, findings_total: findings.length, results: [], ...meta };
+  if (!findings.length) { manifest.message = "No CONFIRMED findings match the filters. Nothing to fix."; await writeManifest(manifest, outDir, quiet); return manifest; }
+  manifest.submission = await initiate(cx, scanId, findings);
+  log(`remediation submitted: ${JSON.stringify(manifest.submission)}`);
+  log(`polling ${findings.length} finding(s) in parallel (up to ${MAX_WORKERS} workers)…`);
+  manifest.results = await runPool(findings, async (f) => { const r = await pollOne(cx, scanId, f); log(`  ${r.severity.padEnd(8)} ${r.engine.padEnd(4)} ${r.query.slice(0, 32).padEnd(32)} -> ${r.status} (${r.elapsed_s}s)`); return r; }, MAX_WORKERS);
+  const order = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+  manifest.results.sort((a, b) => (order[a.severity] ?? 9) - (order[b.severity] ?? 9) || a.query.localeCompare(b.query));
+  manifest.ready = manifest.results.filter((r) => r.status === "READY").length;
+  manifest.failed = manifest.results.length - manifest.ready;
+  await writeManifest(manifest, outDir, quiet); return manifest;
+}
+async function savePlatformFiles(r, index, outDir) {
+  // Download the platform's fully patched files while the signed zip URL is still fresh (minted once per
+  // job, expires after about an hour). Reference copies for the agent under .ftf/platform/<index>/; never
+  // written into the repo automatically.
+  if (!r.zip_url) return;
+  try {
+    const { body } = await httpRead(r.zip_url);
+    const names = listZipEntries(body);
+    const base = path.join(outDir, "platform", String(index).padStart(2, "0"));
+    for (const name of names) {
+      if (name.endsWith("/")) continue;
+      const data = readZipEntry(body, name); if (data === null) continue;
+      const dest = containedPath(path.join(base, name), outDir);
+      mkdirp(path.dirname(dest)); writeBytes(dest, [outDir], data);
+    }
+    r.platform_files_dir = base;
+    for (const c of r.file_changes || []) if (names.includes(c.file_path)) c.platform_file = path.join(base, c.file_path);
+  } catch (e) { log(`could not save platform files for result ${index}: ${e.message}`); r.platform_files_error = String(e.message).slice(0, 200); }
+}
+async function writeManifest(manifest, outDir, quiet) {
+  if (outDir) {
+    outDir = containedPath(outDir, CWD, HOME); mkdirp(outDir);
+    for (const [i, r] of manifest.results.entries()) {
+      if (r.status !== "READY") continue;
+      (r.file_changes || []).forEach((c, j) => { if (!c.diff) return;
+        const p = path.join(outDir, `${String(i).padStart(2, "0")}-${j}-${path.basename(c.file_path || "change")}.patch`);
+        writeText(p, [outDir], c.diff.endsWith("\n") ? c.diff : c.diff + "\n"); c.patch_path = p; });
+      await savePlatformFiles(r, i, outDir);
+    }
+    const mp = path.join(outDir, "ftf-manifest.json"); manifest.manifest_path = mp; writeText(mp, [outDir], JSON.stringify(manifest, null, 2));
+  }
+  if (!quiet) emit(manifest);
+}
+
+// ---------------------------------------------------------------- apply
+const HUNK = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+function applyUnifiedDiff(original, diff) {
+  // Strict single-file unified diff applier (for folders that are not git repos). Returns new text or null.
+  const lines = original.split(/(?<=\n)/);
+  const hunks = []; let cur = null;
+  for (const raw of diff.split(/(?<=\n)/)) {
+    if (/^(diff --git|index |--- |\+\+\+ )/.test(raw)) continue;
+    const m = HUNK.exec(raw);
+    if (m) { cur = { oldStart: parseInt(m[1], 10), lines: [] }; hunks.push(cur); continue; }
+    if (cur && [" ", "-", "+", "\\"].includes(raw[0])) cur.lines.push(raw);
+  }
+  const out = []; let cursor = 0;
+  const strip = (l) => l.replace(/\r?\n$/, "");
+  for (const h of hunks) {
+    const oldBlock = h.lines.filter((l) => l[0] === " " || l[0] === "-").map((l) => l.slice(1));
+    const newBlock = h.lines.filter((l) => l[0] === " " || l[0] === "+").map((l) => l.slice(1));
+    const want = h.oldStart - 1; let pos = null;
+    const deltas = [0]; for (let k = 1; k < 50; k++) deltas.push(k, -k);
+    for (const d of deltas) {
+      const i = want + d;
+      if (i < cursor || i < 0 || i + oldBlock.length > lines.length) continue;
+      let ok = true;
+      for (let j = 0; j < oldBlock.length; j++) if (strip(lines[i + j]) !== strip(oldBlock[j])) { ok = false; break; }
+      if (ok) { pos = i; break; }
+    }
+    if (pos === null) return null;
+    out.push(...lines.slice(cursor, pos), ...newBlock); cursor = pos + oldBlock.length;
+  }
+  out.push(...lines.slice(cursor));
+  return out.join("");
+}
+function applyWithoutGit(diff, filePath, repoRoot) {
+  const dest = containedPath(path.join(repoRoot, filePath), repoRoot);
+  const original = fs.existsSync(dest) ? readText(dest, [repoRoot]) : "";
+  const patched = applyUnifiedDiff(original, diff);
+  if (patched === null) return false;
+  mkdirp(path.dirname(dest)); writeText(dest, [repoRoot], patched); return true;
+}
+function listZipEntries(buf) {
+  let eocd = buf.length - 22; while (eocd >= 0 && buf.readUInt32LE(eocd) !== 0x06054b50) eocd--;
+  if (eocd < 0) throw new Error("bad zip");
+  let ptr = buf.readUInt32LE(eocd + 16); const count = buf.readUInt16LE(eocd + 10); const names = [];
+  for (let k = 0; k < count; k++) {
+    if (buf.readUInt32LE(ptr) !== 0x02014b50) throw new Error("bad zip central dir");
+    const nlen = buf.readUInt16LE(ptr + 28), xlen = buf.readUInt16LE(ptr + 30), clen = buf.readUInt16LE(ptr + 32);
+    names.push(buf.subarray(ptr + 46, ptr + 46 + nlen).toString("utf8")); ptr += 46 + nlen + xlen + clen;
+  }
+  return names;
+}
+function readZipEntry(buf, wanted) {
+  let eocd = buf.length - 22; while (eocd >= 0 && buf.readUInt32LE(eocd) !== 0x06054b50) eocd--;
+  if (eocd < 0) throw new Error("bad zip");
+  let ptr = buf.readUInt32LE(eocd + 16); const count = buf.readUInt16LE(eocd + 10);
+  for (let k = 0; k < count; k++) {
+    if (buf.readUInt32LE(ptr) !== 0x02014b50) throw new Error("bad zip central dir");
+    const method = buf.readUInt16LE(ptr + 10), csize = buf.readUInt32LE(ptr + 20), nlen = buf.readUInt16LE(ptr + 28), xlen = buf.readUInt16LE(ptr + 30), clen = buf.readUInt16LE(ptr + 32), lho = buf.readUInt32LE(ptr + 42);
+    const name = buf.subarray(ptr + 46, ptr + 46 + nlen).toString("utf8"); ptr += 46 + nlen + xlen + clen;
+    if (name !== wanted) continue;
+    const lnlen = buf.readUInt16LE(lho + 26), lxlen = buf.readUInt16LE(lho + 28); const start = lho + 30 + lnlen + lxlen; const data = buf.subarray(start, start + csize);
+    if (method === 0) return Buffer.from(data); if (method === 8) return zlib.inflateRawSync(data); throw new Error(`unsupported zip method ${method}`);
+  }
+  return null;
+}
+function isGitTree(root) {
+  const r = spawnSync("git", ["-C", root, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" });
+  return r.status === 0 && r.stdout.trim() === "true";
+}
+function resolveRepoRoot(explicit, manifest) {
+  const manifestParent = manifest.manifest_path ? path.dirname(path.dirname(manifest.manifest_path)) : null;
+  for (const cand of [explicit, manifest.repo_root, git("rev-parse", "--show-toplevel"), manifestParent, CWD]) {
+    if (cand && fs.existsSync(cand) && fs.statSync(cand).isDirectory()) { const root = path.normalize(path.resolve(cand)); return [root, isGitTree(root)]; }
+  }
+  die("no_target_folder", "Could not find the folder to apply fixes into. Run `apply` from the project root, or pass --repo-root.");
+}
+function overwriteFromPlatform(c, repoRoot) {
+  // Explicit opt-in only: copy the platform's fully patched file over the local one.
+  if (!c.platform_file || !fs.existsSync(c.platform_file)) return false;
+  const dest = containedPath(path.join(repoRoot, c.file_path), repoRoot);
+  mkdirp(path.dirname(dest)); writeBytes(dest, [repoRoot], fs.readFileSync(c.platform_file)); return true;
+}
+function loadManifestForApply(manifestPath, repoRoot) {
+  manifestPath = path.normalize(path.resolve(manifestPath));
+  if (!fs.existsSync(manifestPath)) {
+    for (const base of [repoRoot, git("rev-parse", "--show-toplevel")]) {
+      if (base && fs.existsSync(path.join(base, ".ftf", "ftf-manifest.json"))) { manifestPath = path.normalize(path.join(base, ".ftf", "ftf-manifest.json")); break; }
+    }
+  }
+  if (!fs.existsSync(manifestPath)) die("no_manifest", `Manifest not found at ${manifestPath}. Run \`run\` first, or pass --manifest.`);
+  return JSON.parse(readText(manifestPath, [path.dirname(manifestPath)]));
+}
+function cmdStage(manifestPath, only, repoRoot) {
+  // Compute every fix against the CURRENT local files without writing anything into the workspace.
+  // ready: exact diff fits; full patched content saved under .ftf/staged/ for the agent to propose as an editor edit.
+  // needs_assist: local file drifted; agent places the change by hand.
+  const manifest = loadManifestForApply(manifestPath, repoRoot);
+  const [root, isGit] = resolveRepoRoot(repoRoot, manifest);
+  const outDir = path.dirname(manifest.manifest_path || path.join(root, ".ftf"));
+  const stagedDir = path.join(outDir, "staged");
+  const report = { ok: true, repo_root: root, git_repo: isGit, ready: [], needs_assist: [], failed: [], skipped: [] };
+  for (const [i, r] of (manifest.results || []).entries()) {
+    if (only && !only.includes(i)) { report.skipped.push({ index: i, query: r.query }); continue; }
+    if (r.status !== "READY") { report.skipped.push({ index: i, query: r.query, reason: r.status }); continue; }
+    (r.file_changes || []).forEach((c, j) => {
+      const filePath = c.file_path;
+      const entry = { index: i, query: r.query, severity: r.severity, file: filePath, summary: r.summary, patch_path: c.patch_path };
+      const diff = c.diff || "";
+      if (!diff.trim() || !filePath) { entry.reason = "empty diff"; report.failed.push(entry); return; }
+      let dest, original, patched;
+      try {
+        dest = containedPath(path.join(root, filePath), root);
+        original = fs.existsSync(dest) ? readText(dest, [root]) : "";
+        patched = applyUnifiedDiff(original, diff);
+      } catch (e) { entry.reason = `could not read local file: ${e.message}`.slice(0, 300); report.failed.push(entry); return; }
+      if (patched === null) {
+        Object.assign(entry, { status: "NEEDS_ASSIST", reason: "local file differs from the scanned version; exact diff does not fit", platform_file: c.platform_file, analysis: r.analysis,
+          hint: "Read patch_path (the intended change) and the local file, then propose the same change in the current code as an editor edit, preserving surrounding local edits." });
+        report.needs_assist.push(entry); return;
+      }
+      mkdirp(stagedDir);
+      const staged = path.join(stagedDir, `${String(i).padStart(2, "0")}-${j}-${path.basename(filePath)}`);
+      writeText(staged, [outDir], patched);
+      const dl = diff.split("\n");
+      Object.assign(entry, { status: "READY", exists: fs.existsSync(dest), patched_path: staged,
+        lines_added: dl.filter((l) => l.startsWith("+") && !l.startsWith("+++")).length,
+        lines_removed: dl.filter((l) => l.startsWith("-") && !l.startsWith("---")).length,
+        hint: "Propose an editor edit that replaces the full content of `file` with the content of `patched_path` (or apply the diff at `patch_path`). The developer accepts or rejects it in the editor. Do not write the file yourself with a terminal command." });
+      report.ready.push(entry);
+    });
+  }
+  report.tests = [...new Set((manifest.results || []).flatMap((r) => (r.tests || []).map((t) => t.file_path).filter(Boolean)))].sort();
+  emit(report); return report;
+}
+async function cmdApply(manifestPath, only, repoRoot, overwrite = false) {
+  // Tiered apply. Tier 1: exact diff (git apply --3way in a repo; strict built-in applier in a plain folder).
+  // If that fails the file has drifted: report NEEDS_ASSIST with the patch, reference copy and analysis so the
+  // agent places the same change by hand. --overwrite: explicit opt-in to copy the platform's full file instead.
+  const manifest = loadManifestForApply(manifestPath, repoRoot);
+  const [root, isGit] = resolveRepoRoot(repoRoot, manifest);
+  const report = { ok: true, repo_root: root, git_repo: isGit, applied: [], needs_assist: [], failed: [], skipped: [] };
+  if (!isGit) report.note = "Target folder is not a git repository; fixes are written directly to files (nothing is staged). Review with the editor's diff view.";
+  for (const [i, r] of (manifest.results || []).entries()) {
+    if (only && !only.includes(i)) { report.skipped.push({ index: i, query: r.query }); continue; }
+    if (r.status !== "READY") { report.skipped.push({ index: i, query: r.query, reason: r.status }); continue; }
+    for (const c of r.file_changes || []) {
+      const filePath = c.file_path; const entry = { index: i, query: r.query, file: filePath }; const diff = c.diff || "";
+      if (!diff.trim() || !filePath) { entry.reason = "empty diff"; report.failed.push(entry); continue; }
+      let reason = "";
+      if (isGit) {
+        let proc;
+        try { proc = spawnSync("git", ["apply", "--3way", "--whitespace=nowarn", "-"], { cwd: root, input: diff.endsWith("\n") ? diff : diff + "\n", encoding: "utf8" }); }
+        catch (e) { entry.reason = `git apply could not run: ${e.message}`; report.failed.push(entry); continue; }
+        if (proc.error) { entry.reason = `git apply could not run: ${proc.error.message}`; report.failed.push(entry); continue; }
+        if (proc.status === 0) { entry.method = "git apply --3way"; report.applied.push(entry); continue; }
+        reason = (proc.stderr || proc.stdout || "").trim().slice(0, 300);
+      } else {
+        try {
+          if (applyWithoutGit(diff, filePath, root)) { entry.method = "unified diff applied directly (folder is not a git repo)"; report.applied.push(entry); continue; }
+          reason = "diff context did not match the local file";
+        } catch (e) { reason = `direct apply failed: ${e.message}`.slice(0, 300); }
+      }
+      if (overwrite) {
+        try { if (overwriteFromPlatform(c, root)) { entry.method = "OVERWRITTEN with the platform's full patched file (local edits to this file were discarded; review carefully)"; report.applied.push(entry); continue; } }
+        catch (e) { reason += `; overwrite failed: ${e.message}`; }
+      }
+      Object.assign(entry, {
+        status: "NEEDS_ASSIST", reason, patch_path: c.patch_path, platform_file: c.platform_file, summary: r.summary, analysis: r.analysis,
+        hint: "The local file differs from the scanned version, so the exact diff did not apply. Read patch_path (the intended change) and the local file, then make the same change in the current code with an editor edit, preserving surrounding local edits. platform_file is the platform's fully patched reference copy of the scanned version.",
+      });
+      report.needs_assist.push(entry);
+    }
+  }
+  emit(report); return report;
+}
+
+// ---------------------------------------------------------------- main (tiny arg parser, no deps)
+function parseArgs(argv) {
+  const out = { _: [] }; let key = null;
+  for (const a of argv) {
+    if (a.startsWith("--")) { key = a.slice(2).replace(/-/g, "_"); out[key] = out[key] || []; continue; }
+    if (key) out[key].push(a); else out._.push(a);
+  }
+  return out;
+}
+(async () => {
+  const a = parseArgs(process.argv.slice(2)); const cmd = a._[0];
+  const one = (k, d) => (a[k] && a[k][0]) || d;
+  const many = (k, d) => (a[k] && a[k].length ? a[k] : d);
+  if (!["resolve", "remediate", "run", "stage", "apply"].includes(cmd)) { process.stderr.write("usage: ftf.js resolve|remediate|run|stage|apply [options]\n"); process.exit(2); }
+  if (cmd === "stage") { cmdStage(one("manifest", ".ftf/ftf-manifest.json"), a.only ? a.only[0].split(",").map(Number) : null, one("repo_root")); return; }
+  if (cmd === "apply") { await cmdApply(one("manifest", ".ftf/ftf-manifest.json"), a.only ? a.only[0].split(",").map(Number) : null, one("repo_root"), !!a.overwrite); return; }
+  const cx = await CxClient.create();
+  const severities = many("severity", ["CRITICAL", "HIGH"]).map((s) => s.toUpperCase());
+  const engines = many("engine", ["sast"]).map((e) => e.toLowerCase());
+  const out = one("out", ".ftf");
+  if (cmd === "resolve") await cmdResolve(cx, one("project"), one("branch"));
+  else if (cmd === "remediate") { const sid = one("scan_id"); if (!sid) die("missing_arg", "--scan-id is required"); await cmdRemediate(cx, sid, severities, engines, out); }
+  else { const res = await cmdResolve(cx, one("project"), one("branch"), true); if (!res.resolved) { emit(res); process.exit(2); }
+    await cmdRemediate(cx, res.scan.id, severities, engines, out, false, { project: res.project, branch: res.branch, scan: res.scan }); }
+})().catch((e) => die("unexpected", e.message));
