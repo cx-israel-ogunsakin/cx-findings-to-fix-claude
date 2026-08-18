@@ -7,7 +7,7 @@ description: Find and fix the Checkmarx One security findings that AI Auto Triag
 
 The heavy lifting is done by a script and by the Checkmarx platform. Your job is
 to run the script, relay its questions, and present the results. The
-`/cx-findings-to-fix` command carries the same protocol. Do not call
+`/cx-findings-to-fix:fix` command carries the same protocol. Do not call
 Checkmarx APIs yourself and do not write fixes yourself.
 
 ## The script
