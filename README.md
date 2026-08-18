@@ -10,7 +10,16 @@ Using GitHub Copilot instead? Use
 [cx-findings-to-fix](https://github.com/cx-israel-ogunsakin/cx-findings-to-fix:fix),
 the Copilot version of this same plugin.
 
-<!-- architecture image and guide links return here once the Claude Code versions are built -->
+<p align="center">
+  <a href="docs/findings-to-fix-architecture-animated.html">
+    <img src="docs/images/architecture.gif" width="720" alt="Findings-to-Fix architecture: the ten steps from a scan on Checkmarx One to a reviewed fix in Claude Code">
+  </a>
+  <br>
+  <sub>The ten steps, from a scan to a reviewed fix. Interactive version:
+  <a href="docs/findings-to-fix-architecture-animated.html">docs/findings-to-fix-architecture-animated.html</a>
+  (download and open in a browser). Full guide:
+  <a href="docs/Findings-to-Fix.pdf">docs/Findings-to-Fix.pdf</a>.</sub>
+</p>
 
 ## Getting started
 
@@ -97,7 +106,7 @@ everyone.
 | `skills/fix-confirmed-findings/SKILL.md` | The same instructions as a skill |
 | `skills/fix-confirmed-findings/ftf.py`, `ftf.js` | The tool that talks to Checkmarx (Python and Node versions, identical) |
 | `hooks/` | The one-line "installed" note at session start |
-| `docs/` | `how-it-works.md` (guide and architecture page for Claude Code to follow) |
+| `docs/` | The guide (`Findings-to-Fix.pdf`), `how-it-works.md`, the interactive architecture page, and screenshots |
 
 Nothing runs on a server. Nothing is installed besides this folder. The tool
 (`ftf.py` / `ftf.js`) is identical to the one in the Copilot repository; that
