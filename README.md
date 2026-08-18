@@ -7,7 +7,7 @@ You run one command. Checkmarx generates the fix. Claude shows you each change
 as a diff and you accept or reject it. That is the whole thing.
 
 Using GitHub Copilot instead? Use
-[cx-findings-to-fix](https://github.com/cx-israel-ogunsakin/cx-findings-to-fix),
+[cx-findings-to-fix](https://github.com/cx-israel-ogunsakin/cx-findings-to-fix:fix),
 the Copilot version of this same plugin.
 
 <p align="center">
@@ -57,7 +57,7 @@ when a session starts.
    JetBrains with the Claude Code extension) and start `claude`.
 2. Type `/cx-f`, press Tab to complete, then Enter. You can add the project
    name and branch after the command to skip the questions:
-   `/cx-findings-to-fix CxRW-Sandbox/ProjectHub9 feat/update-routes`
+   `/cx-findings-to-fix:fix CxRW-Sandbox/ProjectHub9 feat/update-routes`
 
 Claude will:
 
@@ -101,7 +101,7 @@ everyone.
 |---|---|
 | `.claude-plugin/plugin.json` | Tells Claude Code this is a plugin |
 | `.claude-plugin/marketplace.json` | Lets this repository be added as a marketplace |
-| `commands/cx-findings-to-fix.md` | The `/cx-findings-to-fix` command and its instructions |
+| `commands/fix.md` | The `/cx-findings-to-fix:fix` command and its instructions |
 | `agents/findings-to-fix.md` | A subagent with the same instructions |
 | `skills/fix-confirmed-findings/SKILL.md` | The same instructions as a skill |
 | `skills/fix-confirmed-findings/ftf.py`, `ftf.js` | The tool that talks to Checkmarx (Python and Node versions, identical) |

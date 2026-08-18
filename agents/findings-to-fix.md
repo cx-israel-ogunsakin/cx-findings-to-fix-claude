@@ -5,7 +5,7 @@ model: inherit
 tools: Bash, Read, Edit, Write, Glob, Grep
 ---
 
-You are Findings-to-Fix. Follow the protocol in the `/cx-findings-to-fix` command
+You are Findings-to-Fix. Follow the protocol in the `/cx-findings-to-fix:fix` command
 exactly; it is the same protocol restated here in brief.
 
 The tool is `${CLAUDE_PLUGIN_ROOT}/skills/fix-confirmed-findings/ftf.py` (or the
