@@ -139,6 +139,11 @@ class CxClient:
         except (RuntimeError, ValueError, KeyError) as exc:
             log.error("token exchange failed: %s", exc)
             die("auth_failed", "Token exchange failed. The API key may be revoked or expired.")
+        except urllib.error.URLError as exc:
+            if "CERTIFICATE_VERIFY_FAILED" in str(exc):
+                die("tls_certificates", "This Python cannot verify HTTPS certificates (no CA bundle). Use the system or pyenv Python, "
+                    "or run the Node version: node ftf.js ...", detail=str(exc)[:200])
+            die("network", f"Could not reach Checkmarx One: {exc}")
         claims = b64json(tok.split(".")[1])
         self.base = os.environ.get("CX_BASE_URL") or claims.get("ast-base-url")
         if not self.base:
@@ -160,6 +165,11 @@ class CxClient:
                 status, raw = resp.status, resp.read()
         except urllib.error.HTTPError as exc:
             status, raw = exc.code, exc.read()
+        except urllib.error.URLError as exc:
+            if "CERTIFICATE_VERIFY_FAILED" in str(exc):
+                die("tls_certificates", "This Python cannot verify HTTPS certificates (no CA bundle). Use the system or pyenv Python, "
+                    "or run the Node version: node ftf.js ...", detail=str(exc)[:200])
+            die("network", f"Could not reach Checkmarx One: {exc}")
         try:
             parsed = json.loads(raw) if raw else {}
         except ValueError as exc:
@@ -204,7 +214,47 @@ def _exact_project(cx, name):
     return exact[0] if exact else None
 
 
+UNKNOWN_BRANCH = ".unknown"
+UNKNOWN_BRANCH_NOTE = ("Checkmarx One files scans that were uploaded without branch information (zip uploads, "
+                       "some CI and monorepo setups) under the branch name '.unknown'. It is a normal, valid branch.")
+
+
+def _latest_completed_scan(cx, project_id, branch):
+    st, scans = cx.get(f"/api/scans?project-id={project_id}&branch={urllib.parse.quote(branch, safe='')}"
+                       f"&statuses=Completed&limit=1&sort=-created_at")
+    scan = (scans.get("scans") or [None])[0] if st == 200 else None
+    if not scan:
+        return None
+    return {"id": scan["id"], "created_at": scan.get("createdAt"), "engines": scan.get("engines"),
+            "source_origin": scan.get("sourceOrigin"), "source_type": scan.get("sourceType")}
+
+
+def _branches_with_scans(cx, project_id):
+    """Every branch that has at least one completed scan, each with its latest completed scan,
+    newest first."""
+    st, names = cx.get(f"/api/projects/branches?project-id={project_id}&limit=100")
+    names = names if (st == 200 and isinstance(names, list)) else []
+    out = []
+    for b in names:
+        scan = _latest_completed_scan(cx, project_id, b)
+        if scan:
+            out.append({"branch": b, "latest_scan": scan,
+                        "note": UNKNOWN_BRANCH_NOTE if b == UNKNOWN_BRANCH else None})
+    out.sort(key=lambda e: e["latest_scan"]["created_at"] or "", reverse=True)
+    return out
+
+
 def cmd_resolve(cx, project=None, branch=None, quiet=False):
+    """Resolve project and scan.
+
+    Branch selection, in order:
+      1. --branch given: use it (must have a completed scan).
+      2. Exactly one branch has completed scans (the monorepo / zip-upload norm, often '.unknown'):
+         use it and say so. No question.
+      3. Several branches, and the local git branch is one of them: use it.
+      4. Several branches, local branch not among them (or no git): ask the developer, offering the
+         branches with their latest scan dates and the newest as the suggested default.
+    """
     guess = local_repo_guess()
     result = {"ok": True, "local": guess, "tenant": cx.tenant, "base_url": cx.base}
 
@@ -231,24 +281,46 @@ def cmd_resolve(cx, project=None, branch=None, quiet=False):
             emit(result)
         return result
 
-    branch = branch or guess["branch"]
-    st, branches = cx.get(f"/api/projects/branches?project-id={proj['id']}&limit=50")
-    branches = branches if (st == 200 and isinstance(branches, list)) else []
-    st, scans = cx.get(f"/api/scans?project-id={proj['id']}&branch={urllib.parse.quote(branch, safe='')}"
-                       f"&statuses=Completed&limit=1&sort=-created_at")
-    scan = (scans.get("scans") or [None])[0] if st == 200 else None
-    result.update({"project": {"name": proj["name"], "id": proj["id"]}, "branch": branch,
-                   "branches_with_scans": branches})
-    if not scan:
-        result.update({"resolved": False, "reason": "no_completed_scan_on_branch",
-                       "next": "Ask the developer which branch to use (see branches_with_scans) and rerun with --branch."})
+    result["project"] = {"name": proj["name"], "id": proj["id"]}
+    with_scans = _branches_with_scans(cx, proj["id"])
+    result["branches_with_scans"] = with_scans
+
+    chosen, how = None, None
+    if branch:
+        hit = next((e for e in with_scans if e["branch"] == branch), None)
+        if hit:
+            chosen, how = hit, "requested"
+        else:
+            result.update({"resolved": False, "reason": "no_completed_scan_on_branch", "branch": branch,
+                           "next": "The requested branch has no completed scan. Show branches_with_scans (branch, latest scan date) as a numbered list and ask which to use; rerun with --branch."})
+            if not quiet:
+                emit(result)
+            return result
+    elif not with_scans:
+        result.update({"resolved": False, "reason": "no_completed_scans",
+                       "next": "This project has no completed scans yet. Tell the developer; nothing to fix until a scan completes."})
         if not quiet:
             emit(result)
         return result
+    elif len(with_scans) == 1:
+        chosen, how = with_scans[0], "only_branch_with_scans"
+    else:
+        local = next((e for e in with_scans if guess["branch"] and e["branch"] == guess["branch"]), None)
+        if local:
+            chosen, how = local, "matches_local_branch"
+        else:
+            result.update({"resolved": False, "reason": "branch_choice_needed",
+                           "local_branch": guess["branch"] or None,
+                           "suggested": with_scans[0]["branch"],
+                           "next": ("The local branch has no completed scan but several branches do. Show branches_with_scans "
+                                    "as a numbered list with each latest scan date, mark 'suggested' (the most recent) as the "
+                                    "default, and ask which to use; rerun with --branch.")})
+            if not quiet:
+                emit(result)
+            return result
 
-    result.update({"resolved": True,
-                   "scan": {"id": scan["id"], "created_at": scan.get("createdAt"), "engines": scan.get("engines"),
-                            "source_origin": scan.get("sourceOrigin")}})
+    result.update({"resolved": True, "branch": chosen["branch"], "branch_selected_by": how,
+                   "branch_note": chosen.get("note"), "scan": chosen["latest_scan"]})
     if not quiet:
         emit(result)
     return result
@@ -291,6 +363,73 @@ def list_confirmed(cx, scan_id, severities, engines):
         if not batch or offset >= total:
             break
     return findings
+
+
+# ---------------------------------------------------------------- scope (monorepos)
+def _norm_rel(path):
+    return (path or "").replace("\\", "/").lstrip("/")
+
+
+def infer_path_strip(findings, repo_root):
+    """Scanner paths are relative to wherever the scan ran. Find the number of leading path components
+    to strip so that most SAST finding paths resolve under repo_root. Returns (strip_count, hit_ratio)."""
+    files = [_norm_rel(f["file"]) for f in findings if f.get("file")]
+    if not files or not repo_root:
+        return 0, 0.0
+    best = (0, 0.0)
+    for strip in range(0, 4):
+        hits = 0
+        for fp in files:
+            parts = fp.split("/")
+            if len(parts) <= strip:
+                continue
+            if os.path.isfile(os.path.join(repo_root, *parts[strip:])):
+                hits += 1
+        ratio = hits / len(files)
+        if ratio > best[1]:
+            best = (strip, ratio)
+        if ratio >= 0.9:
+            break
+    return best
+
+
+def infer_scope_subpath(repo_root):
+    """If the folder the developer has open (CWD) is a subfolder of the git repo, that subfolder
+    (relative, forward slashes) is the natural monorepo scope. Empty string means the whole repo."""
+    try:
+        rr = os.path.normpath(os.path.abspath(repo_root)); cwd = os.path.normpath(os.path.abspath(os.getcwd()))
+        if os.path.commonpath([rr, cwd]) != rr or rr == cwd:
+            return ""
+        return os.path.relpath(cwd, rr).replace(os.sep, "/")
+    except ValueError:
+        return ""
+
+
+def apply_scope(findings, repo_root, scope):
+    """scope: 'auto' (infer from open folder), 'all', or an explicit repo-relative subpath.
+    Returns (kept, info). SCA findings carry no file path and are never scoped out."""
+    strip, ratio = infer_path_strip(findings, repo_root)
+    sub = "" if scope in (None, "auto") else ("" if scope == "all" else _norm_rel(scope).rstrip("/"))
+    if scope in (None, "auto"):
+        sub = infer_scope_subpath(repo_root)
+    info = {"mode": scope or "auto", "subpath": sub, "path_strip": strip, "path_match_ratio": round(ratio, 2),
+            "findings_total": len(findings)}
+    if not sub:
+        info.update({"findings_in_scope": len(findings), "applied": False})
+        return findings, info
+    kept = []
+    for f in findings:
+        if not f.get("file"):           # SCA: package-level, no path
+            kept.append(f); continue
+        parts = _norm_rel(f["file"]).split("/")[strip:]
+        rel = "/".join(parts)
+        if rel == sub or rel.startswith(sub + "/"):
+            kept.append(f)
+    why = "the folder you have open" if scope in (None, "auto") else "the scope you asked for"
+    info.update({"findings_in_scope": len(kept), "applied": True,
+                 "note": (f"Showing findings under '{sub}' ({why}). The project has "
+                          f"{len(findings)} in total; use --scope all to see everything.")})
+    return kept, info
 
 
 def initiate(cx, scan_id, findings):
@@ -339,13 +478,17 @@ def poll_one(cx, scan_id, f):
         delay = min(POLL_MAX, delay + 5)
 
 
-def cmd_remediate(cx, scan_id, severities, engines, out_dir, quiet=False, meta=None):
+def cmd_remediate(cx, scan_id, severities, engines, out_dir, quiet=False, meta=None, scope="auto"):
     log.info("listing CONFIRMED findings for scan %s… (severity=%s; engines=%s)",
              scan_id[:8], ",".join(severities), ",".join(engines) or "all")
     findings = list_confirmed(cx, scan_id, severities, engines)
     log.info("%d confirmed finding(s)", len(findings))
+    repo_root = git("rev-parse", "--show-toplevel") or CWD
+    findings, scope_info = apply_scope(findings, repo_root, scope)
+    if scope_info.get("applied"):
+        log.info("scope '%s': %d of %d finding(s)", scope_info["subpath"], scope_info["findings_in_scope"], scope_info["findings_total"])
     manifest = {"ok": True, "scan_id": scan_id, "tenant": cx.tenant, "base_url": cx.base,
-                "repo_root": git("rev-parse", "--show-toplevel") or CWD,
+                "repo_root": repo_root, "scope": scope_info,
                 "filters": {"state": ["CONFIRMED"], "severity": severities, "engines": engines},
                 "findings_total": len(findings), "results": []}
     if meta:
@@ -671,6 +814,8 @@ def main():
         p.add_argument("--severity", nargs="+", default=["CRITICAL", "HIGH"])
         p.add_argument("--engine", nargs="+", default=["sast"], help="sast and/or sca (default: sast)")
         p.add_argument("--out", default=".ftf", help="Directory for manifest and .patch files (default: .ftf)")
+        p.add_argument("--scope", default="auto",
+                       help="Monorepos: 'auto' keeps findings under the folder you have open (default), 'all' keeps every finding, or give a repo-relative subpath")
 
     add_resolve_args(sub.add_parser("resolve"))
     add_remediate_args(sub.add_parser("remediate"))
@@ -703,14 +848,15 @@ def main():
     if a.cmd == "resolve":
         cmd_resolve(cx, a.project, a.branch)
     elif a.cmd == "remediate":
-        cmd_remediate(cx, a.scan_id, [s.upper() for s in a.severity], engines, a.out)
+        cmd_remediate(cx, a.scan_id, [s.upper() for s in a.severity], engines, a.out, scope=a.scope)
     elif a.cmd == "run":
         res = cmd_resolve(cx, a.project, a.branch, quiet=True)
         if not res.get("resolved"):
             emit(res)
             sys.exit(2)
         cmd_remediate(cx, res["scan"]["id"], [s.upper() for s in a.severity], engines, a.out,
-                      meta={"project": res["project"], "branch": res["branch"], "scan": res["scan"]})
+                      meta={"project": res["project"], "branch": res["branch"], "branch_selected_by": res.get("branch_selected_by"),
+                            "branch_note": res.get("branch_note"), "scan": res["scan"]}, scope=a.scope)
 
 
 if __name__ == "__main__":

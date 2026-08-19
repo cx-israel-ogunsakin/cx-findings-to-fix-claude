@@ -61,9 +61,12 @@ when a session starts.
 
 Claude will:
 
-- work out which Checkmarx project and branch this is. If it cannot tell from
-  your git setup, it lists the likely projects and asks you to pick one, then
-  the branches that have scans. It never guesses.
+- work out which Checkmarx project and scan this is. If the project name does
+  not match your git setup, it lists the likely projects and asks you to pick.
+  If only one branch has scans (common for monorepos and zip uploads, where
+  Checkmarx files scans under the branch name `.unknown`), it uses that and
+  tells you. If several branches have scans and yours is not one of them, it
+  lists them with dates and asks. It never guesses.
 - fetch the fixes from Checkmarx (a couple of minutes the first time, seconds
   after that).
 - show you a table of the confirmed findings and ask which to apply.
@@ -81,6 +84,9 @@ Nothing is committed or pushed. You review, then commit as usual.
   places the fix into your current code by hand instead of applying it
   blindly, and tells you so. Your edits stay.
 - It works whether your project folder is a git clone or a plain folder.
+- Monorepos: if you open one service's folder rather than the whole repo,
+  you see only the findings under that folder, and it tells you how many the
+  project has in total. Ask for "all findings" to see everything.
 - Package (SCA) fixes are supported but off by default. Ask Claude to
   "include package fixes" if you want them.
 - The first run asks you to allow the plugin's command; that is Claude Code's

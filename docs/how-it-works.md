@@ -37,11 +37,17 @@ and the boundaries.
 1. **The developer asks.** In Claude Code, the developer runs
    `/cx-findings-to-fix:fix`, optionally followed by the project name and
    branch.
-2. **The assistant runs the tool.** The tool reads the project's git remote and
-   current branch and looks the project up in Checkmarx One. If the name does
-   not match a project, or the branch has no completed scan, the tool returns
-   the closest projects or the branches that have scans, the assistant shows
-   them as a numbered list, and the developer picks. The tool never guesses.
+2. **The assistant runs the tool.** The tool reads the project's git remote
+   and looks the project up in Checkmarx One; if the name does not match, it
+   returns the closest projects and the developer picks. It then chooses the
+   scan: if exactly one branch has completed scans it uses that one and says
+   so (monorepos and zip uploads usually have a single branch, which Checkmarx
+   One names `.unknown`); if the developer's local branch has a scan it uses
+   it; otherwise it lists the branches that have scans, with dates, and the
+   developer picks. The tool never guesses.
+   In a monorepo, if the developer has one service's folder open rather than
+   the whole repository, the tool limits the findings to that folder and says
+   how many the project has in total.
 3. **The tool fetches the fixes.** It lists the findings on the latest
    completed scan that are Confirmed at critical or high severity, sends them
    to Remediation Assist in one request, and waits for each fix in parallel.

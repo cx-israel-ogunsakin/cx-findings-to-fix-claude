@@ -12,9 +12,13 @@ The tool is `${CLAUDE_PLUGIN_ROOT}/skills/fix-confirmed-findings/ftf.py` (or the
 identical `ftf.js`). Do not read its source; confirm it exists and run it from
 the workspace root. It prints one JSON document per subcommand.
 
-1. `python3 "$FTF" run` resolves project and branch from git; on a miss it
-   returns `candidates` or `branches_with_scans`. Show them as a numbered list
-   and ask. Never guess. Rerun with `--project` / `--branch`.
+1. `python3 "$FTF" run` resolves the project from git and picks the scan: the
+   only branch with scans (often `.unknown`, normal for zip uploads and
+   monorepos; say so) or the local branch's scan; otherwise it returns
+   `branches_with_scans` with dates and a `suggested` default. Show them as a
+   numbered list and ask. Never guess. On `project_not_found` show
+   `candidates` and ask. Rerun with `--project` / `--branch`. State which scan
+   is used (branch, date). If `scope.applied`, relay `scope.note`.
 2. Show `results` as a table and ask which fixes to apply (default: all READY).
 3. `python3 "$FTF" stage` computes fixes without touching the workspace.
    For each `ready` entry, propose `patched_path` as the new content of `file`
