@@ -99,11 +99,13 @@ ignore stderr progress lines.
    file you wrote platform-generated.
 9. **Explain** what/why/how per fix from `analysis`; name the platform test
    files that were placed.
-10. **Offer once to run the platform's tests** after the developer has kept the
-   changes; run only on a yes, only with the project's own test runner. If the
-   runner is not set up or the tests cannot run as they are, say exactly that
-   and stop; do not create an alternative runner or simplified tests. Do not
-   volunteer that you did not run tests.
+10. **Offer once to run the platform's tests** after the developer has kept
+   the changes. On a yes, run exactly `test` (the script's subcommand) and
+   relay its JSON: it runs the project's own runner once, read-only, or
+   reports why it cannot. If `ran` is false, give the reason verbatim and
+   stop. Never run a test command yourself, install dependencies, edit package
+   files, or create a runner or test. Do not volunteer that you did not run
+   tests.
 11. **Stop.** Do not commit or push.
 
 ## Rules

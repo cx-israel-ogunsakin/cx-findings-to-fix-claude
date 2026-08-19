@@ -10,6 +10,7 @@ Subcommands
   remediate --scan-id ID [--severity ...] [--engine ...] [--out DIR] -> fixes manifest as JSON
   stage     [--manifest FILE] [--only IDX,...] -> compute patched files without touching the workspace
                                                  (Copilot proposes them as editor edits; developer keeps/undoes)
+  test      [--manifest FILE]                  -> run the project's own test runner once, read-only; report pass/fail
   apply     [--manifest FILE] [--only IDX,...] -> write fixes directly (terminal use; --overwrite for drift)
   run       [resolve args] [remediate args]   -> resolve + remediate in one go
 
@@ -817,6 +818,79 @@ def cmd_apply(manifest_path, only=None, repo_root=None, overwrite=False):
     return report
 
 
+# ---------------------------------------------------------------- test runner
+TEST_TIMEOUT = 300
+
+
+def detect_test_runner(repo_root):
+    """Find the project's OWN test runner. Returns (argv, label) or (None, reason).
+    Never installs anything, never writes anything."""
+    pj = os.path.join(repo_root, "package.json")
+    if os.path.isfile(pj):
+        try:
+            d = json.loads(read_text(pj, (repo_root,)))
+        except (ValueError, OSError):
+            d = {}
+        script = ((d.get("scripts") or {}).get("test") or "").strip()
+        if not script or script.lower().startswith("echo ") or "no test specified" in script.lower() or script.lower() == "cx test":
+            return None, f"package.json has no usable test script (scripts.test is {script!r})"
+        if not os.path.isdir(os.path.join(repo_root, "node_modules")):
+            return None, "node_modules is not installed; run the project's install step (e.g. npm install) first"
+        return ["npm", "test", "--silent"], f"npm test ({script})"
+    if any(os.path.isfile(os.path.join(repo_root, f)) for f in ("pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini")) \
+            or os.path.isdir(os.path.join(repo_root, "tests")) or os.path.isdir(os.path.join(repo_root, "test")):
+        probe = subprocess.run([sys.executable, "-m", "pytest", "--version"], capture_output=True, text=True, check=False)
+        if probe.returncode == 0:
+            return [sys.executable, "-m", "pytest", "-q"], "python -m pytest"
+        return None, "pytest is not installed in this Python environment"
+    if os.path.isfile(os.path.join(repo_root, "pom.xml")):
+        return ["mvn", "-q", "test"], "mvn test"
+    if os.path.isfile(os.path.join(repo_root, "build.gradle")) or os.path.isfile(os.path.join(repo_root, "build.gradle.kts")):
+        return ["./gradlew", "test"] if os.path.isfile(os.path.join(repo_root, "gradlew")) else ["gradle", "test"], "gradle test"
+    if os.path.isfile(os.path.join(repo_root, "go.mod")):
+        return ["go", "test", "./..."], "go test ./..."
+    # one level down (monorepo-shaped projects keep the runner in a service folder)
+    try:
+        subs = sorted(d for d in os.listdir(repo_root) if os.path.isdir(os.path.join(repo_root, d)) and not d.startswith("."))
+    except OSError:
+        subs = []
+    hints = [d for d in subs if os.path.isfile(os.path.join(repo_root, d, "package.json")) or os.path.isdir(os.path.join(repo_root, d, "tests"))]
+    if hints:
+        return None, (f"no test runner at the project root; found test setups under {', '.join(hints[:4])}. "
+                      f"Open that folder (or rerun with --repo-root) to run its tests")
+    return None, "no recognised test runner (package.json scripts.test, pytest, maven, gradle, go)"
+
+
+def cmd_test(manifest_path, repo_root=None, only_files=None):
+    """Run the project's own test runner once, read-only, and report. The agent relays the result.
+    If the runner is not set up, say so; this command never installs, edits, or creates anything."""
+    manifest = _load_manifest_for_apply(manifest_path, repo_root)
+    repo_root, _ = _resolve_repo_root(repo_root, manifest)
+    platform_tests = sorted({t.get("file_path") for r in manifest.get("results", []) for t in (r.get("tests") or []) if t.get("file_path")})
+    present = [t for t in platform_tests if os.path.isfile(os.path.join(repo_root, t))]
+    argv, label = detect_test_runner(repo_root)
+    report = {"ok": True, "repo_root": repo_root, "platform_tests": platform_tests, "platform_tests_present": present}
+    if not argv:
+        report.update({"ran": False, "reason": label,
+                       "note": "The project's test runner is not set up, so the tests were not run. Tell the developer exactly this "
+                               "and stop; do not install dependencies, edit package files, or create another runner."})
+        emit(report)
+        return report
+    if only_files and argv[0] == sys.executable:      # pytest accepts file args; npm/mvn/gradle/go do not
+        argv = argv + [f for f in only_files if os.path.isfile(os.path.join(repo_root, f))]
+    try:
+        proc = subprocess.run(argv, cwd=repo_root, capture_output=True, text=True, timeout=TEST_TIMEOUT, check=False)
+        out = (proc.stdout or "") + (proc.stderr or "")
+        report.update({"ran": True, "runner": label, "exit_code": proc.returncode, "passed": proc.returncode == 0,
+                       "output_tail": out[-3000:]})
+    except subprocess.TimeoutExpired:
+        report.update({"ran": True, "runner": label, "passed": False, "reason": f"timed out after {TEST_TIMEOUT}s"})
+    except (OSError, subprocess.SubprocessError) as exc:
+        report.update({"ran": False, "runner": label, "reason": f"could not start the runner: {exc}"})
+    emit(report)
+    return report
+
+
 # ---------------------------------------------------------------- main
 def main():
     ap = argparse.ArgumentParser(prog="ftf", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -844,6 +918,10 @@ def main():
     p_stage.add_argument("--manifest", default=".ftf/ftf-manifest.json")
     p_stage.add_argument("--only", help="Comma-separated result indexes to stage (default: all READY)")
     p_stage.add_argument("--repo-root")
+    p_test = sub.add_parser("test")
+    p_test.add_argument("--manifest", default=".ftf/ftf-manifest.json")
+    p_test.add_argument("--repo-root")
+    p_test.add_argument("--only", nargs="*", help="Limit to these test files where the runner supports it (pytest)")
     p_apply = sub.add_parser("apply")
     p_apply.add_argument("--manifest", default=".ftf/ftf-manifest.json")
     p_apply.add_argument("--only", help="Comma-separated result indexes to apply (default: all READY)")
@@ -852,6 +930,9 @@ def main():
                          help="For drifted files, copy the platform's full patched file over the local one instead of handing off (discards local edits to that file)")
 
     a = ap.parse_args()
+    if a.cmd == "test":
+        cmd_test(a.manifest, a.repo_root, a.only)
+        return
     if a.cmd == "stage":
         only = [int(x) for x in a.only.split(",")] if a.only else None
         cmd_stage(a.manifest, only, a.repo_root)

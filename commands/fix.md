@@ -126,14 +126,14 @@ name and the second (if any) as the branch, and pass them as `--project` and
 9. **Offer to run the platform's tests, once.** After the developer has
    accepted the changes, if any platform test files were placed, offer once:
    "Checkmarx generated tests for this fix in `<files>`. Want me to run them?"
-   Run them only on a yes, and only with the project's own test runner from
-   the workspace root (for example the `test` script in package.json, or
-   `python -m pytest <file>`). If the project's runner is not set up or the
-   tests cannot run as they are (missing dependency, no runner), report exactly
-   that and stop; do not create an alternative runner, a standalone script, or
-   a simplified version of the tests. Report pass/fail with the relevant
-   output. Do not say anything about not running tests when the developer has
-   not asked.
+   On a yes, run exactly `python3 "$FTF" test` from the workspace root and
+   relay its JSON. It runs the project's OWN test runner once, read-only, or
+   reports why it cannot (`ran: false` with `reason`). If `ran` is false,
+   tell the developer the reason verbatim and stop. Never run a test command
+   yourself, never install dependencies, never edit package files, never
+   create a runner or a standalone test, never retry with a different tool.
+   Do not say anything about not running tests when the developer has not
+   asked.
 10. **Stop.** Do not commit or push.
 
 Findings default to engine `sast`. Only add `--engine sast sca` if the developer

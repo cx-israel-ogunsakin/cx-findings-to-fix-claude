@@ -511,6 +511,49 @@ async function cmdApply(manifestPath, only, repoRoot, overwrite = false) {
   emit(report); return report;
 }
 
+// ---------------------------------------------------------------- test runner
+const TEST_TIMEOUT = 300_000;
+function detectTestRunner(repoRoot) {
+  // The project's OWN runner. Returns [argv, label] or [null, reason]. Never installs or writes anything.
+  const pj = path.join(repoRoot, "package.json");
+  if (fs.existsSync(pj)) {
+    let d = {}; try { d = JSON.parse(readText(pj, [repoRoot])); } catch (e) { d = {}; }
+    const script = ((d.scripts || {}).test || "").trim();
+    if (!script || /^echo /i.test(script) || /no test specified/i.test(script) || script.toLowerCase() === "cx test") return [null, `package.json has no usable test script (scripts.test is ${JSON.stringify(script)})`];
+    if (!fs.existsSync(path.join(repoRoot, "node_modules"))) return [null, "node_modules is not installed; run the project's install step (e.g. npm install) first"];
+    return [["npm", "test", "--silent"], `npm test (${script})`];
+  }
+  const has = (f) => fs.existsSync(path.join(repoRoot, f));
+  if (["pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini"].some(has) || has("tests") || has("test")) {
+    const probe = spawnSync("python3", ["-m", "pytest", "--version"], { encoding: "utf8" });
+    if (probe.status === 0) return [["python3", "-m", "pytest", "-q"], "python -m pytest"];
+    return [null, "pytest is not installed in this Python environment"];
+  }
+  if (has("pom.xml")) return [["mvn", "-q", "test"], "mvn test"];
+  if (has("build.gradle") || has("build.gradle.kts")) return [has("gradlew") ? ["./gradlew", "test"] : ["gradle", "test"], "gradle test"];
+  if (has("go.mod")) return [["go", "test", "./..."], "go test ./..."];
+  let subs = []; try { subs = fs.readdirSync(repoRoot).filter((d) => !d.startsWith(".") && fs.statSync(path.join(repoRoot, d)).isDirectory()).sort(); } catch (e) { subs = []; }
+  const hints = subs.filter((d) => fs.existsSync(path.join(repoRoot, d, "package.json")) || fs.existsSync(path.join(repoRoot, d, "tests")));
+  if (hints.length) return [null, `no test runner at the project root; found test setups under ${hints.slice(0, 4).join(", ")}. Open that folder (or rerun with --repo-root) to run its tests`];
+  return [null, "no recognised test runner (package.json scripts.test, pytest, maven, gradle, go)"];
+}
+function cmdTest(manifestPath, repoRoot, onlyFiles) {
+  const manifest = loadManifestForApply(manifestPath, repoRoot);
+  const [root] = resolveRepoRoot(repoRoot, manifest);
+  const platformTests = [...new Set((manifest.results || []).flatMap((r) => (r.tests || []).map((t) => t.file_path).filter(Boolean)))].sort();
+  const present = platformTests.filter((t) => fs.existsSync(path.join(root, t)));
+  const [argv, label] = detectTestRunner(root);
+  const report = { ok: true, repo_root: root, platform_tests: platformTests, platform_tests_present: present };
+  if (!argv) { Object.assign(report, { ran: false, reason: label, note: "The project's test runner is not set up, so the tests were not run. Tell the developer exactly this and stop; do not install dependencies, edit package files, or create another runner." }); emit(report); return report; }
+  let cmd = argv; if (onlyFiles && onlyFiles.length && argv[0] === "python3") cmd = argv.concat(onlyFiles.filter((f) => fs.existsSync(path.join(root, f))));
+  const proc = spawnSync(cmd[0], cmd.slice(1), { cwd: root, encoding: "utf8", timeout: TEST_TIMEOUT });
+  if (proc.error && proc.error.code === "ETIMEDOUT") { Object.assign(report, { ran: true, runner: label, passed: false, reason: `timed out after ${TEST_TIMEOUT / 1000}s` }); emit(report); return report; }
+  if (proc.error) { Object.assign(report, { ran: false, runner: label, reason: `could not start the runner: ${proc.error.message}` }); emit(report); return report; }
+  const out = (proc.stdout || "") + (proc.stderr || "");
+  Object.assign(report, { ran: true, runner: label, exit_code: proc.status, passed: proc.status === 0, output_tail: out.slice(-3000) });
+  emit(report); return report;
+}
+
 // ---------------------------------------------------------------- main (tiny arg parser, no deps)
 function parseArgs(argv) {
   const out = { _: [] }; let key = null;
@@ -524,7 +567,8 @@ function parseArgs(argv) {
   const a = parseArgs(process.argv.slice(2)); const cmd = a._[0];
   const one = (k, d) => (a[k] && a[k][0]) || d;
   const many = (k, d) => (a[k] && a[k].length ? a[k] : d);
-  if (!["resolve", "remediate", "run", "stage", "apply"].includes(cmd)) { process.stderr.write("usage: ftf.js resolve|remediate|run|stage|apply [options]\n"); process.exit(2); }
+  if (!["resolve", "remediate", "run", "stage", "test", "apply"].includes(cmd)) { process.stderr.write("usage: ftf.js resolve|remediate|run|stage|test|apply [options]\n"); process.exit(2); }
+  if (cmd === "test") { cmdTest(one("manifest", ".ftf/ftf-manifest.json"), one("repo_root"), many("only", [])); return; }
   if (cmd === "stage") { cmdStage(one("manifest", ".ftf/ftf-manifest.json"), a.only ? a.only[0].split(",").map(Number) : null, one("repo_root")); return; }
   if (cmd === "apply") { await cmdApply(one("manifest", ".ftf/ftf-manifest.json"), a.only ? a.only[0].split(",").map(Number) : null, one("repo_root"), !!a.overwrite); return; }
   const cx = await CxClient.create();
