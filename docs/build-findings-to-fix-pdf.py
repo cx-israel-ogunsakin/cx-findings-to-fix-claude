@@ -365,9 +365,10 @@ def diagram_after_scan(M):
     gap2 = 24.0
     dw = 198.0
     ew = W - dw - gap2
-    d = Box(0, dw, "AI Auto Triage",
-            "Runs when the scan completes. Reviews critical and high findings and "
-            "marks them Confirmed or Proposed Not Exploitable.", MAGENTA, M)
+    d = Box(0, dw, "Triage Assist",
+            "Evaluates findings for Attackability (reachability, exploitability, "
+            "code context, policy) and updates the state of those that require "
+            "action to Confirmed.", MAGENTA, M)
     e = Box(dw + gap2, ew, "Remediation Assist",
             "Generates a code fix for a finding on request: the changed files as diffs, "
             "a short explanation, and unit tests.", BLUE, M)
@@ -574,10 +575,12 @@ def build_html(font_css, M):
   <p class="subtitle">Fix confirmed Checkmarx findings from your terminal or editor
      with Claude&nbsp;Code</p>
   <div class="rule-accent"></div>
-  <p class="summary">Two Checkmarx One AI agents, working inside Claude Code: AI Auto
-     Triage decides which findings are real, and Remediation Assist generates the fix.
-     You run one command, Claude shows you each change as a diff, and you accept or
-     reject it.</p>
+  <p class="summary">Built on Checkmarx One Triage Assist and Remediation Assist. Triage Assist
+     has already evaluated the findings on the platform, using reachability, exploitability,
+     code context, and policy signals, and confirmed the ones that require action.
+     Findings-to-Fix takes only those, asks Remediation Assist to generate the review-ready
+     fix, and shows you each change in Claude Code as a diff to accept or reject. The agent
+     proposes; you approve.</p>
   <div class="cover-cols">
     <div class="panel">
       <h2 class="pnl-h">What you need</h2>
@@ -602,7 +605,7 @@ def build_html(font_css, M):
       </ol>
     </div>
   </div>
-  <p class="cover-note">Only findings that Checkmarx AI Auto Triage has marked
+  <p class="cover-note">Only findings that Checkmarx Triage Assist has marked
      <b>Confirmed</b>, at critical or high severity, are fixed. Nothing is committed
      or pushed. You review, then commit as usual.</p>
 </div>
@@ -811,7 +814,7 @@ claude plugin install cx-findings-to-fix@cx-findings-to-fix-claude</pre>
           plugin's command.</li>
       <li>If something is missing (no API key, expired key, feature not enabled on your
           tenant), Claude tells you exactly what and how to fix it.</li>
-      <li>AI Auto Triage sets the Confirmed and Proposed Not Exploitable states on the
+      <li>Triage Assist sets the Confirmed and Proposed Not Exploitable states on the
           platform. Nothing in the plugin changes those verdicts.</li>
     </ul>
   </div>
