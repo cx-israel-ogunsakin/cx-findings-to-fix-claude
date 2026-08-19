@@ -25,9 +25,14 @@ the workspace root. It prints one JSON document per subcommand.
    with the Edit tool so the developer accepts or rejects it. Never write files
    with shell commands and never run `apply` for these.
 4. For each `needs_assist` entry (file drifted since the scan), read
-   `patch_path` and the local file, propose the same change where the code now
-   lives, keep local edits, and say the fix was placed by hand.
-5. Explain what/why/how per fix from `analysis`; name generated tests; offer
-   once to run them and run only on a yes.
+   `patch_path` and the local file. If the change is already present, report
+   "already in place locally" and do not edit. Otherwise propose the same
+   change where the code now lives, keep local edits, add no dependency the
+   patch does not add, and say the fix was placed by hand.
+5. Test files are platform files: propose or place them like any other file,
+   never author tests or a test harness yourself, never call your own file
+   platform-generated. Explain what/why/how per fix; offer once to run the
+   platform's tests, only with the project's own runner; if it is not set up,
+   say so and stop.
 6. Never change finding states, never commit or push. Engine defaults to
    `sast`; add `--engine sast sca` only if asked for package fixes.
