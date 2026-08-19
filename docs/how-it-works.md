@@ -41,6 +41,36 @@ and the boundaries.
   the Checkmarx `cx` CLI configuration. The tool exchanges it for a short-lived
   token in memory. The key never appears in the assistant's conversation.
 
+## The plugin's anatomy
+
+Each file has exactly one job.
+
+```
+cx-findings-to-fix-claude/
+├── .claude-plugin/
+│   ├── plugin.json           the manifest: name, version, description
+│   └── marketplace.json      makes this repository installable as a marketplace
+├── commands/fix.md           the /cx-findings-to-fix:fix command: the protocol
+├── agents/findings-to-fix.md a subagent carrying the same protocol, for delegation
+├── skills/fix-confirmed-findings/
+│   ├── SKILL.md              the same protocol as a skill, triggered by phrasing
+│   ├── ftf.py                the tool: every deterministic step
+│   └── ftf.js                the identical tool for machines without Python
+├── hooks/
+│   ├── hooks.json            runs check-auth.sh at session start
+│   └── check-auth.sh         the session note and the API key warning
+└── docs/                     this document, the guide, the architecture page
+```
+
+Markdown decides; code does. The command, the subagent, and the skill are one
+protocol written for three entry points, and they carry all of the judgment:
+ask rather than guess, propose rather than write, offer the tests once. The
+tool carries none: it talks to the Checkmarx One API, computes fixes against
+the developer's current files, applies nothing on its own, and prints one JSON
+document per subcommand. Everything below follows from that split. It is also
+why the assistant's cost stays flat as findings grow: the model reads a
+manifest and the diffs it proposes, never the whole result set.
+
 ## The sequence
 
 1. **The developer asks.** In Claude Code, the developer runs
