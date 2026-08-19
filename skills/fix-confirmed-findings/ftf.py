@@ -229,19 +229,28 @@ def _latest_completed_scan(cx, project_id, branch):
             "source_origin": scan.get("sourceOrigin"), "source_type": scan.get("sourceType")}
 
 
-def _branches_with_scans(cx, project_id):
-    """Every branch that has at least one completed scan, each with its latest completed scan,
-    newest first."""
-    st, names = cx.get(f"/api/projects/branches?project-id={project_id}&limit=100")
-    names = names if (st == 200 and isinstance(names, list)) else []
-    out = []
-    for b in names:
-        scan = _latest_completed_scan(cx, project_id, b)
-        if scan:
-            out.append({"branch": b, "latest_scan": scan,
+def _branches_with_scans(cx, project_id, max_scans=200, max_branches=10):
+    """Branches that have recent completed scans, newest first, from ONE paginated query over the
+    project's most recent completed scans (the scans API returns the branch on each scan). This
+    replaces one-call-per-branch enumeration, which on projects with hundreds of branches took minutes.
+    Only called when the cheap candidates (requested branch, local branch) have no scan."""
+    seen, out, offset, page = {}, [], 0, 100
+    while offset < max_scans:
+        st, body = cx.get(f"/api/scans?project-id={project_id}&statuses=Completed&limit={page}&offset={offset}&sort=-created_at")
+        scans = (body.get("scans") or []) if st == 200 else []
+        for sc in scans:
+            b = sc.get("branch")
+            if b is None or b in seen:
+                continue
+            seen[b] = True
+            out.append({"branch": b,
+                        "latest_scan": {"id": sc["id"], "created_at": sc.get("createdAt"), "engines": sc.get("engines"),
+                                        "source_origin": sc.get("sourceOrigin"), "source_type": sc.get("sourceType")},
                         "note": UNKNOWN_BRANCH_NOTE if b == UNKNOWN_BRANCH else None})
-    out.sort(key=lambda e: e["latest_scan"]["created_at"] or "", reverse=True)
-    return out
+        if len(scans) < page:
+            break
+        offset += page
+    return out[:max_branches], len(out)
 
 
 def cmd_resolve(cx, project=None, branch=None, quiet=False):
@@ -282,39 +291,48 @@ def cmd_resolve(cx, project=None, branch=None, quiet=False):
         return result
 
     result["project"] = {"name": proj["name"], "id": proj["id"]}
-    with_scans = _branches_with_scans(cx, proj["id"])
-    result["branches_with_scans"] = with_scans
 
-    chosen, how = None, None
+    def pick(name, how):
+        scan = _latest_completed_scan(cx, proj["id"], name)
+        if scan:
+            return {"branch": name, "latest_scan": scan, "note": UNKNOWN_BRANCH_NOTE if name == UNKNOWN_BRANCH else None}, how
+        return None, None
+
+    # 1. Cheap candidates first: one call each. This is the path almost every git-based developer takes.
+    chosen, how = (None, None)
     if branch:
-        hit = next((e for e in with_scans if e["branch"] == branch), None)
-        if hit:
-            chosen, how = hit, "requested"
-        else:
+        chosen, how = pick(branch, "requested")
+        if not chosen:
+            with_scans, n_total = _branches_with_scans(cx, proj["id"])
             result.update({"resolved": False, "reason": "no_completed_scan_on_branch", "branch": branch,
-                           "next": "The requested branch has no completed scan. Show branches_with_scans (branch, latest scan date) as a numbered list and ask which to use; rerun with --branch."})
+                           "branches_with_scans": with_scans, "branches_total": n_total,
+                           "next": "The requested branch has no completed scan. Show branches_with_scans (branch, latest scan date) as a numbered list, mention they can type another branch name, and ask which to use; rerun with --branch."})
             if not quiet:
                 emit(result)
             return result
-    elif not with_scans:
-        result.update({"resolved": False, "reason": "no_completed_scans",
-                       "next": "This project has no completed scans yet. Tell the developer; nothing to fix until a scan completes."})
-        if not quiet:
-            emit(result)
-        return result
-    elif len(with_scans) == 1:
-        chosen, how = with_scans[0], "only_branch_with_scans"
-    else:
-        local = next((e for e in with_scans if guess["branch"] and e["branch"] == guess["branch"]), None)
-        if local:
-            chosen, how = local, "matches_local_branch"
+    elif guess["branch"] and guess["branch"] != "HEAD":
+        chosen, how = pick(guess["branch"], "matches_local_branch")
+
+    # 2. Only on a miss: one query for the branches with recent scans.
+    if not chosen:
+        with_scans, n_total = _branches_with_scans(cx, proj["id"])
+        result.update({"branches_with_scans": with_scans, "branches_total": n_total})
+        if not with_scans:
+            result.update({"resolved": False, "reason": "no_completed_scans",
+                           "next": "This project has no completed scans yet. Tell the developer; nothing to fix until a scan completes."})
+            if not quiet:
+                emit(result)
+            return result
+        if n_total == 1:
+            chosen, how = with_scans[0], "only_branch_with_scans"
         else:
             result.update({"resolved": False, "reason": "branch_choice_needed",
                            "local_branch": guess["branch"] or None,
                            "suggested": with_scans[0]["branch"],
-                           "next": ("The local branch has no completed scan but several branches do. Show branches_with_scans "
-                                    "as a numbered list with each latest scan date, mark 'suggested' (the most recent) as the "
-                                    "default, and ask which to use; rerun with --branch.")})
+                           "next": ("The local branch has no completed scan but other branches do. Show branches_with_scans "
+                                    "(the most recently scanned, up to 10) as a numbered list with each latest scan date, mark "
+                                    "'suggested' (the most recent) as the default, say they can also type any other branch name, "
+                                    "and ask which to use; rerun with --branch.")})
             if not quiet:
                 emit(result)
             return result
