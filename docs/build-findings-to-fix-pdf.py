@@ -846,25 +846,24 @@ claude plugin install cx-findings-to-fix@cx-findings-to-fix-claude</pre>
   </div>
 </div>
 <h2 class="sub-h">What is in the plugin</h2>
-<table class="tbl parts">
-  <thead><tr><th>Path</th><th>What it is</th></tr></thead>
-  <tbody>
-    <tr><td><code>.claude-plugin/plugin.json</code></td>
-        <td>Tells Claude Code this is a plugin</td></tr>
-    <tr><td><code>.claude-plugin/marketplace.json</code></td>
-        <td>Lets the repository be added as a marketplace</td></tr>
-    <tr><td><code>commands/fix.md</code></td>
-        <td>The <code>/cx-findings-to-fix:fix</code> command and its instructions</td></tr>
-    <tr><td><code>agents/findings-to-fix.md</code></td>
-        <td>A subagent with the same instructions</td></tr>
-    <tr><td><code>skills/fix-confirmed-findings/SKILL.md</code></td>
-        <td>The same instructions as a skill</td></tr>
-    <tr><td><code>skills/fix-confirmed-findings/ftf.py</code>, <code>ftf.js</code></td>
-        <td>The tool that talks to Checkmarx (Python and Node versions, identical)</td></tr>
-    <tr><td><code>hooks/</code></td><td>The one-line "installed" note at session start</td></tr>
-    <tr><td><code>docs/</code></td><td>The guide and architecture document</td></tr>
-  </tbody>
-</table>
+<p>Each file has exactly one job.</p>
+<pre class="code">cx-findings-to-fix-claude/
+├── .claude-plugin/
+│   ├── plugin.json            the manifest: name, version, description
+│   └── marketplace.json       makes this repository installable as a marketplace
+├── commands/fix.md            the /cx-findings-to-fix:fix command: the protocol
+├── agents/findings-to-fix.md  a subagent with the same protocol, for delegation
+├── skills/fix-confirmed-findings/
+│   ├── SKILL.md               the same protocol as a skill, triggered by phrasing
+│   ├── ftf.py                 the tool: every deterministic step
+│   └── ftf.js                 the identical tool, for machines without Python
+├── hooks/                     the session note and the API key warning
+└── docs/                      this guide, how it works, architecture page</pre>
+<p>Markdown decides; code does. The command, the subagent, and the skill are one protocol
+   written for three entry points, and they carry the judgment: ask rather than guess,
+   propose rather than write, offer the tests once. The tool carries none: it talks to the
+   Checkmarx One API, computes fixes against your current files, applies nothing on its
+   own, and prints one JSON document. That split is why every run behaves the same way.</p>
 <p class="note-line">Nothing runs on a server. Nothing is installed besides the plugin folder.
    A GitHub Copilot version of the same plugin exists as a separate repository,
    cx-findings-to-fix.</p>

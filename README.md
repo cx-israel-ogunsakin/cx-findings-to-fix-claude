@@ -109,16 +109,31 @@ everyone.
 
 ## What is in this repository
 
-| Path | What it is |
-|---|---|
-| `.claude-plugin/plugin.json` | Tells Claude Code this is a plugin |
-| `.claude-plugin/marketplace.json` | Lets this repository be added as a marketplace |
-| `commands/fix.md` | The `/cx-findings-to-fix:fix` command and its instructions |
-| `agents/findings-to-fix.md` | A subagent with the same instructions |
-| `skills/fix-confirmed-findings/SKILL.md` | The same instructions as a skill |
-| `skills/fix-confirmed-findings/ftf.py`, `ftf.js` | The tool that talks to Checkmarx (Python and Node versions, identical) |
-| `hooks/` | The one-line "installed" note at session start |
-| `docs/` | The guide (`Findings-to-Fix.pdf`), `how-it-works.md`, the interactive architecture page, and screenshots |
+Each file has exactly one job.
+
+```
+cx-findings-to-fix-claude/
+├── .claude-plugin/
+│   ├── plugin.json           ← "this is a plugin": name, version, description
+│   └── marketplace.json      ← "this repo is a marketplace that serves this plugin"
+├── commands/fix.md           ← the /cx-findings-to-fix:fix command (the protocol)
+├── agents/findings-to-fix.md ← a subagent with the same protocol, for delegation
+├── skills/fix-confirmed-findings/
+│   ├── SKILL.md              ← the same protocol as a skill (triggers on phrasing)
+│   ├── ftf.py                ← the tool: all the deterministic work
+│   └── ftf.js                ← the identical tool, for machines without Python
+├── hooks/
+│   ├── hooks.json            ← "run check-auth.sh when a session starts"
+│   └── check-auth.sh         ← the session note and the API key warning
+└── docs/                     ← the guide (PDF), how-it-works, architecture page, screenshots
+```
+
+The split that matters: **markdown decides, code does.** The command, the
+subagent, and the skill are the same protocol written for three entry points,
+and they hold all the judgment (ask rather than guess, propose rather than
+write, offer the tests once). The tool holds none: it talks to Checkmarx One,
+computes fixes against your files, and prints JSON. That line is why a run
+costs cents and behaves the same every time.
 
 Nothing runs on a server. Nothing is installed besides this folder. The tool
 (`ftf.py` / `ftf.js`) is identical to the one in the Copilot repository; that
