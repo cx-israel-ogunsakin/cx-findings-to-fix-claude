@@ -676,9 +676,12 @@ claude plugin install cx-findings-to-fix@cx-findings-to-fix-claude</pre>
 </ol>
 <h2 class="sub-h">Claude will</h2>
 <ul class="dots">
-  <li>work out which Checkmarx project and branch this is. If it cannot tell from your
-      git setup, it lists the likely projects and asks you to pick one, then the branches
-      that have scans. It never guesses.</li>
+  <li>work out which Checkmarx project and scan this is. If the project name does not
+      match your git setup, it lists the likely projects and asks you to pick. If only one
+      branch has scans (common for monorepos and zip uploads, which Checkmarx files under
+      the branch name <span class="mono">.unknown</span>), it uses that and tells you. If
+      several branches have scans and yours is not one of them, it lists the most recently
+      scanned ones with dates and asks. It never guesses.</li>
   <li>fetch the fixes from Checkmarx: a couple of minutes the first time, seconds after that.</li>
   <li>show you a table of the confirmed findings and ask which to apply.</li>
   <li>propose each change as an edit you accept or reject, file by file.</li>
@@ -798,6 +801,9 @@ claude plugin install cx-findings-to-fix@cx-findings-to-fix-claude</pre>
     <h2 class="pnl-h">Good to know</h2>
     <ul class="dots small">
       <li>It works whether your project folder is a git clone or a plain folder.</li>
+      <li>Monorepos: open one service's folder rather than the whole repository and you see
+          only the findings under that folder, with the project's total noted. Ask for "all
+          findings" to see everything.</li>
       <li>Ask Claude to "include package fixes" when you want SCA fixes as well.</li>
       <li>Claude Code's Bash tool has to be allowed. The first run asks you to permit the
           plugin's command.</li>
