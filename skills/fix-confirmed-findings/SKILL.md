@@ -85,16 +85,26 @@ ignore stderr progress lines.
    a reviewable diff to accept or reject. Never write files with a terminal
    command and never run `apply` for these. List each file with `+added/-removed`
    and its one-line summary, then ask the developer to review and accept or reject each one.
-7. **Drifted files (`needs_assist`):** read `patch_path` and the local file,
-   propose the same change where the code lives now as an editor edit,
-   preserving local edits, and say plainly the fix was placed by hand.
-   Overwriting with the platform's whole file is only on explicit request
-   (`apply --overwrite --only <index>`).
-8. **Explain** what/why/how per fix from `analysis`, name the generated tests.
-9. **Offer to run the generated tests** once the developer has kept the
-   changes; run only on a yes, with the project's own test runner, and report
-   the result. Do not volunteer that you did not run tests.
-10. **Stop.** Do not commit or push.
+7. **Drifted files (`needs_assist`):** read `patch_path` and the local file.
+   If the change is already present locally, do not edit; report it as
+   "already in place locally". Otherwise propose the same change where the
+   code lives now as an editor edit, preserving local edits, without adding
+   any import or dependency the patch does not add, and say plainly the fix
+   was placed by hand. Overwriting with the platform's whole file is only on
+   explicit request (`apply --overwrite --only <index>`).
+8. **Test files are platform files; never author tests.** The platform's
+   generated tests arrive in the manifest like any other file change (paths
+   under `tests`); propose or place them like any other file. If one cannot be
+   placed, say so; do not write a substitute test or harness, and never call a
+   file you wrote platform-generated.
+9. **Explain** what/why/how per fix from `analysis`; name the platform test
+   files that were placed.
+10. **Offer once to run the platform's tests** after the developer has kept the
+   changes; run only on a yes, only with the project's own test runner. If the
+   runner is not set up or the tests cannot run as they are, say exactly that
+   and stop; do not create an alternative runner or simplified tests. Do not
+   volunteer that you did not run tests.
+11. **Stop.** Do not commit or push.
 
 ## Rules
 
