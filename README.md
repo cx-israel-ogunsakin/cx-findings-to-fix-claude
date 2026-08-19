@@ -1,10 +1,12 @@
 # Findings-to-Fix for Claude Code
 
-Fix the security findings Checkmarx has already confirmed in your code, from
-your terminal or editor, with Claude Code.
+Two Checkmarx One AI agents, working inside Claude Code: **AI Auto Triage**
+decides which findings are real, and **Remediation Assist** generates the fix.
+You review each change as a diff and accept or reject it.
 
-You run one command. Checkmarx generates the fix. Claude shows you each change
-as a diff and you accept or reject it. That is the whole thing.
+You run one command. It pulls only the findings AI Auto Triage has confirmed,
+asks Remediation Assist for the fix, and Claude shows you each change. That is
+the whole thing.
 
 Using GitHub Copilot instead? Use
 [cx-findings-to-fix](https://github.com/cx-israel-ogunsakin/cx-findings-to-fix:fix),

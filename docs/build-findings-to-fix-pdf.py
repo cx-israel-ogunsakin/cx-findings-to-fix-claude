@@ -574,8 +574,10 @@ def build_html(font_css, M):
   <p class="subtitle">Fix confirmed Checkmarx findings from your terminal or editor
      with Claude&nbsp;Code</p>
   <div class="rule-accent"></div>
-  <p class="summary">You run one command. Checkmarx generates the fix. Claude shows you
-     each change as a diff, and you accept or reject it.</p>
+  <p class="summary">Two Checkmarx One AI agents, working inside Claude Code: AI Auto
+     Triage decides which findings are real, and Remediation Assist generates the fix.
+     You run one command, Claude shows you each change as a diff, and you accept or
+     reject it.</p>
   <div class="cover-cols">
     <div class="panel">
       <h2 class="pnl-h">What you need</h2>
