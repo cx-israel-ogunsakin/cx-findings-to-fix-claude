@@ -32,7 +32,7 @@ the workspace root. It prints one JSON document per subcommand.
 5. Test files are platform files: propose or place them like any other file,
    never author tests or a test harness yourself, never call your own file
    platform-generated. Explain what/why/how per fix; offer once to run the
-   platform's tests, only with the project's own runner; if it is not set up,
-   say so and stop.
+   platform's tests; on a yes run `python3 "$FTF" test` and relay its JSON;
+   never run tests, install, or edit package files yourself.
 6. Never change finding states, never commit or push. Engine defaults to
    `sast`; add `--engine sast sca` only if asked for package fixes.
