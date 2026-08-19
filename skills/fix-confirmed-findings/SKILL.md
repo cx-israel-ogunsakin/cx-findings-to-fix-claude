@@ -35,20 +35,38 @@ ignore stderr progress lines.
 
 ## Steps
 
-1. **Resolve.** Run `run` with no arguments first; it detects the project name
-   and branch from the local git checkout and, if both resolve in Checkmarx One,
-   goes straight on to fetch fixes.
-   - If the JSON has `"resolved": false` with reason `project_not_found`, tell
-     the developer the local repo name did not match a Checkmarx One project.
-     If `candidates` is non-empty, list them as a numbered list and ask which
-     one (or for the exact name). Then rerun with `--project <name>`.
-   - If reason is `no_completed_scan_on_branch`, list `branches_with_scans` as a
-     numbered list and ask which branch to use. Rerun with `--branch <name>`.
-   - Never guess a project or branch. The developer's answer is what gets used.
-2. **Wait.** The script submits every CONFIRMED critical/high finding to
-   Remediation Assist in one batch and polls in parallel. This takes about 2 to
-   3 minutes when fixes are generated fresh, and seconds when they already
-   exist. Do not interrupt it.
+1. **Resolve and fetch.** Run `run` with no arguments. The tool
+   reads the project name from git, picks the scan, fetches the fixes, and
+   tells you how it chose. Cases:
+   - `"resolved": false`, reason `project_not_found`: say the local repo name
+     did not match a Checkmarx One project. If `candidates` is non-empty show
+     them as a numbered list and ask which one (or for the exact name). Rerun
+     with `--project "<name>"`.
+   - reason `no_completed_scans`: this project has no completed scan yet.
+     Say so and stop; there is nothing to fix until a scan completes.
+   - reason `branch_choice_needed`: the developer's local branch has no scan
+     but several branches do. Show `branches_with_scans` as a numbered list,
+     each with its `latest_scan.created_at` date, and say which one is
+     `suggested` (the most recent). Ask which to use. Rerun with
+     `--branch "<name>"`. Never pick one yourself.
+   - reason `no_completed_scan_on_branch`: a `--branch` you passed has no
+     completed scan. Show the list as above and ask.
+   - `"resolved": true`: proceed. State in one line which scan is being used:
+     branch, `scan.created_at` date, and engines. If `branch_selected_by` is
+     `only_branch_with_scans`, say that this is the only branch with scans so
+     it was used without asking. If the branch is `.unknown`, relay
+     `branch_note` in plain words: Checkmarx One uses `.unknown` for scans
+     uploaded without branch information (zip uploads, some CI and monorepo
+     setups); it is normal.
+   - `"ok": false`: show `message` and `hint` verbatim and stop.
+   The manifest also has a `scope` block. If `scope.applied` is true the tool
+   limited the findings to the folder the developer has open (monorepos):
+   relay `scope.note` so they know, and that `--scope all` shows everything.
+   If `scope.findings_in_scope` is 0 but `findings_total` is not, say the
+   project has confirmed findings but none under this folder, and offer
+   `--scope all`.
+2. **Wait.** Fresh fixes take about 2 to 3 minutes; fixes that already exist
+   come back in seconds. Do not interrupt the run.
 3. **Present.** From the manifest JSON, show a compact table of `results`:
    severity, query, engine, `file:line`, status, and the files each fix touches
    (`file_changes[].file_path`). Include each `summary` in one line. If

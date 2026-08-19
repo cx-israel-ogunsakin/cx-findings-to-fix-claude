@@ -133,6 +133,22 @@ async function exactProject(cx, name) {
   if (st !== 200) return null;
   return (body.projects || []).find((p) => p.name === name) || null;
 }
+const UNKNOWN_BRANCH = ".unknown";
+const UNKNOWN_BRANCH_NOTE = "Checkmarx One files scans that were uploaded without branch information (zip uploads, some CI and monorepo setups) under the branch name '.unknown'. It is a normal, valid branch.";
+async function latestCompletedScan(cx, projectId, branch) {
+  const [st, scans] = await cx.get(`/api/scans?project-id=${projectId}&branch=${encodeURIComponent(branch)}&statuses=Completed&limit=1&sort=-created_at`);
+  const scan = st === 200 ? (scans.scans || [])[0] : null;
+  if (!scan) return null;
+  return { id: scan.id, created_at: scan.createdAt, engines: scan.engines, source_origin: scan.sourceOrigin, source_type: scan.sourceType };
+}
+async function branchesWithScans(cx, projectId) {
+  const [st, names] = await cx.get(`/api/projects/branches?project-id=${projectId}&limit=100`);
+  const list = st === 200 && Array.isArray(names) ? names : [];
+  const out = [];
+  for (const b of list) { const scan = await latestCompletedScan(cx, projectId, b); if (scan) out.push({ branch: b, latest_scan: scan, note: b === UNKNOWN_BRANCH ? UNKNOWN_BRANCH_NOTE : null }); }
+  out.sort((a, b) => (b.latest_scan.created_at || "").localeCompare(a.latest_scan.created_at || ""));
+  return out;
+}
 async function cmdResolve(cx, project, branch, quiet = false) {
   const guess = localRepoGuess();
   const result = { ok: true, local: guess, tenant: cx.tenant, base_url: cx.base };
@@ -145,14 +161,23 @@ async function cmdResolve(cx, project, branch, quiet = false) {
     Object.assign(result, { resolved: false, reason: "project_not_found", tried, candidates: near, next: "Ask the developer for the exact Checkmarx One project name (pick from candidates if listed) and rerun with --project." });
     if (!quiet) emit(result); return result;
   }
-  branch = branch || guess.branch;
-  const [stB, branchesRaw] = await cx.get(`/api/projects/branches?project-id=${proj.id}&limit=50`);
-  const branches = stB === 200 && Array.isArray(branchesRaw) ? branchesRaw : [];
-  const [stS, scans] = await cx.get(`/api/scans?project-id=${proj.id}&branch=${encodeURIComponent(branch)}&statuses=Completed&limit=1&sort=-created_at`);
-  const scan = stS === 200 ? (scans.scans || [])[0] : null;
-  Object.assign(result, { project: { name: proj.name, id: proj.id }, branch, branches_with_scans: branches });
-  if (!scan) { Object.assign(result, { resolved: false, reason: "no_completed_scan_on_branch", next: "Ask the developer which branch to use (see branches_with_scans) and rerun with --branch." }); if (!quiet) emit(result); return result; }
-  Object.assign(result, { resolved: true, scan: { id: scan.id, created_at: scan.createdAt, engines: scan.engines, source_origin: scan.sourceOrigin } });
+  result.project = { name: proj.name, id: proj.id };
+  const withScans = await branchesWithScans(cx, proj.id);
+  result.branches_with_scans = withScans;
+  let chosen = null, how = null;
+  if (branch) {
+    const hit = withScans.find((e) => e.branch === branch);
+    if (hit) { chosen = hit; how = "requested"; }
+    else { Object.assign(result, { resolved: false, reason: "no_completed_scan_on_branch", branch, next: "The requested branch has no completed scan. Show branches_with_scans (branch, latest scan date) as a numbered list and ask which to use; rerun with --branch." }); if (!quiet) emit(result); return result; }
+  } else if (!withScans.length) {
+    Object.assign(result, { resolved: false, reason: "no_completed_scans", next: "This project has no completed scans yet. Tell the developer; nothing to fix until a scan completes." }); if (!quiet) emit(result); return result;
+  } else if (withScans.length === 1) { chosen = withScans[0]; how = "only_branch_with_scans"; }
+  else {
+    const local = withScans.find((e) => guess.branch && e.branch === guess.branch);
+    if (local) { chosen = local; how = "matches_local_branch"; }
+    else { Object.assign(result, { resolved: false, reason: "branch_choice_needed", local_branch: guess.branch || null, suggested: withScans[0].branch, next: "The local branch has no completed scan but several branches do. Show branches_with_scans as a numbered list with each latest scan date, mark 'suggested' (the most recent) as the default, and ask which to use; rerun with --branch." }); if (!quiet) emit(result); return result; }
+  }
+  Object.assign(result, { resolved: true, branch: chosen.branch, branch_selected_by: how, branch_note: chosen.note, scan: chosen.latest_scan });
   if (!quiet) emit(result); return result;
 }
 
@@ -175,6 +200,41 @@ async function listConfirmed(cx, scanId, severities, engines) {
   }
   return findings;
 }
+// ---------------------------------------------------------------- scope (monorepos)
+const normRel = (p) => (p || "").replace(/\\/g, "/").replace(/^\/+/, "");
+function inferPathStrip(findings, repoRoot) {
+  const files = findings.filter((f) => f.file).map((f) => normRel(f.file));
+  if (!files.length || !repoRoot) return [0, 0];
+  let best = [0, 0];
+  for (let strip = 0; strip < 4; strip++) {
+    let hits = 0;
+    for (const fp of files) { const parts = fp.split("/"); if (parts.length <= strip) continue; if (fs.existsSync(path.join(repoRoot, ...parts.slice(strip)))) hits++; }
+    const ratio = hits / files.length;
+    if (ratio > best[1]) best = [strip, ratio];
+    if (ratio >= 0.9) break;
+  }
+  return best;
+}
+function inferScopeSubpath(repoRoot) {
+  try {
+    const rr = path.normalize(path.resolve(repoRoot)), cwd = path.normalize(path.resolve(process.cwd()));
+    const rel = path.relative(rr, cwd);
+    if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) return "";
+    return rel.split(path.sep).join("/");
+  } catch (e) { return ""; }
+}
+function applyScope(findings, repoRoot, scope) {
+  const [strip, ratio] = inferPathStrip(findings, repoRoot);
+  const auto = scope == null || scope === "auto";
+  const sub = auto ? inferScopeSubpath(repoRoot) : (scope === "all" ? "" : normRel(scope).replace(/\/+$/, ""));
+  const info = { mode: scope || "auto", subpath: sub, path_strip: strip, path_match_ratio: Math.round(ratio * 100) / 100, findings_total: findings.length };
+  if (!sub) { Object.assign(info, { findings_in_scope: findings.length, applied: false }); return [findings, info]; }
+  const kept = findings.filter((f) => { if (!f.file) return true; const rel = normRel(f.file).split("/").slice(strip).join("/"); return rel === sub || rel.startsWith(sub + "/"); });
+  const why = auto ? "the folder you have open" : "the scope you asked for";
+  Object.assign(info, { findings_in_scope: kept.length, applied: true, note: `Showing findings under '${sub}' (${why}). The project has ${findings.length} in total; use --scope all to see everything.` });
+  return [kept, info];
+}
+
 async function initiate(cx, scanId, findings) {
   const buckets = {}; for (const f of findings) (buckets[f.engine] ||= []).push(f.alternate_id);
   const payload = { scanID: scanId, buckets: Object.entries(buckets).filter(([e]) => e === "sast" || e === "sca").map(([scannerType, resultIDs]) => ({ scannerType, resultIDs })) };
@@ -208,11 +268,14 @@ async function runPool(items, worker, size) {
   await Promise.all(Array.from({ length: Math.min(size, items.length) }, async () => { while (i < items.length) { const it = items[i++]; out.push(await worker(it)); } }));
   return out;
 }
-async function cmdRemediate(cx, scanId, severities, engines, outDir, quiet = false, meta = {}) {
+async function cmdRemediate(cx, scanId, severities, engines, outDir, quiet = false, meta = {}, scope = "auto") {
   log(`listing CONFIRMED findings for scan ${scanId.slice(0, 8)}… (severity=${severities.join(",")}; engines=${engines.join(",") || "all"})`);
-  const findings = await listConfirmed(cx, scanId, severities, engines);
+  let findings = await listConfirmed(cx, scanId, severities, engines);
   log(`${findings.length} confirmed finding(s)`);
-  const manifest = { ok: true, scan_id: scanId, tenant: cx.tenant, base_url: cx.base, repo_root: git("rev-parse", "--show-toplevel") || CWD, filters: { state: ["CONFIRMED"], severity: severities, engines }, findings_total: findings.length, results: [], ...meta };
+  const repoRoot = git("rev-parse", "--show-toplevel") || CWD;
+  let scopeInfo; [findings, scopeInfo] = applyScope(findings, repoRoot, scope);
+  if (scopeInfo.applied) log(`scope '${scopeInfo.subpath}': ${scopeInfo.findings_in_scope} of ${scopeInfo.findings_total} finding(s)`);
+  const manifest = { ok: true, scan_id: scanId, tenant: cx.tenant, base_url: cx.base, repo_root: repoRoot, scope: scopeInfo, filters: { state: ["CONFIRMED"], severity: severities, engines }, findings_total: findings.length, results: [], ...meta };
   if (!findings.length) { manifest.message = "No CONFIRMED findings match the filters. Nothing to fix."; await writeManifest(manifest, outDir, quiet); return manifest; }
   manifest.submission = await initiate(cx, scanId, findings);
   log(`remediation submitted: ${JSON.stringify(manifest.submission)}`);
@@ -452,9 +515,9 @@ function parseArgs(argv) {
   const cx = await CxClient.create();
   const severities = many("severity", ["CRITICAL", "HIGH"]).map((s) => s.toUpperCase());
   const engines = many("engine", ["sast"]).map((e) => e.toLowerCase());
-  const out = one("out", ".ftf");
+  const out = one("out", ".ftf"); const scope = one("scope", "auto");
   if (cmd === "resolve") await cmdResolve(cx, one("project"), one("branch"));
-  else if (cmd === "remediate") { const sid = one("scan_id"); if (!sid) die("missing_arg", "--scan-id is required"); await cmdRemediate(cx, sid, severities, engines, out); }
+  else if (cmd === "remediate") { const sid = one("scan_id"); if (!sid) die("missing_arg", "--scan-id is required"); await cmdRemediate(cx, sid, severities, engines, out, false, {}, scope); }
   else { const res = await cmdResolve(cx, one("project"), one("branch"), true); if (!res.resolved) { emit(res); process.exit(2); }
-    await cmdRemediate(cx, res.scan.id, severities, engines, out, false, { project: res.project, branch: res.branch, scan: res.scan }); }
+    await cmdRemediate(cx, res.scan.id, severities, engines, out, false, { project: res.project, branch: res.branch, branch_selected_by: res.branch_selected_by, branch_note: res.branch_note, scan: res.scan }, scope); }
 })().catch((e) => die("unexpected", e.message));
