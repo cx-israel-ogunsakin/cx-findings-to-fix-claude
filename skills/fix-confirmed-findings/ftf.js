@@ -141,13 +141,21 @@ async function latestCompletedScan(cx, projectId, branch) {
   if (!scan) return null;
   return { id: scan.id, created_at: scan.createdAt, engines: scan.engines, source_origin: scan.sourceOrigin, source_type: scan.sourceType };
 }
-async function branchesWithScans(cx, projectId) {
-  const [st, names] = await cx.get(`/api/projects/branches?project-id=${projectId}&limit=100`);
-  const list = st === 200 && Array.isArray(names) ? names : [];
-  const out = [];
-  for (const b of list) { const scan = await latestCompletedScan(cx, projectId, b); if (scan) out.push({ branch: b, latest_scan: scan, note: b === UNKNOWN_BRANCH ? UNKNOWN_BRANCH_NOTE : null }); }
-  out.sort((a, b) => (b.latest_scan.created_at || "").localeCompare(a.latest_scan.created_at || ""));
-  return out;
+async function branchesWithScans(cx, projectId, maxScans = 200, maxBranches = 10) {
+  // ONE paginated query over the project's most recent completed scans (each carries its branch),
+  // instead of one call per branch. Only called when the cheap candidates have no scan.
+  const seen = new Set(); const out = []; let offset = 0; const page = 100;
+  while (offset < maxScans) {
+    const [st, body] = await cx.get(`/api/scans?project-id=${projectId}&statuses=Completed&limit=${page}&offset=${offset}&sort=-created_at`);
+    const scans = st === 200 ? (body.scans || []) : [];
+    for (const sc of scans) {
+      const b = sc.branch; if (b == null || seen.has(b)) continue; seen.add(b);
+      out.push({ branch: b, latest_scan: { id: sc.id, created_at: sc.createdAt, engines: sc.engines, source_origin: sc.sourceOrigin, source_type: sc.sourceType }, note: b === UNKNOWN_BRANCH ? UNKNOWN_BRANCH_NOTE : null });
+    }
+    if (scans.length < page) break;
+    offset += page;
+  }
+  return [out.slice(0, maxBranches), out.length];
 }
 async function cmdResolve(cx, project, branch, quiet = false) {
   const guess = localRepoGuess();
@@ -162,20 +170,27 @@ async function cmdResolve(cx, project, branch, quiet = false) {
     if (!quiet) emit(result); return result;
   }
   result.project = { name: proj.name, id: proj.id };
-  const withScans = await branchesWithScans(cx, proj.id);
-  result.branches_with_scans = withScans;
+  const pick = async (name, how) => { const scan = await latestCompletedScan(cx, proj.id, name); return scan ? [{ branch: name, latest_scan: scan, note: name === UNKNOWN_BRANCH ? UNKNOWN_BRANCH_NOTE : null }, how] : [null, null]; };
   let chosen = null, how = null;
   if (branch) {
-    const hit = withScans.find((e) => e.branch === branch);
-    if (hit) { chosen = hit; how = "requested"; }
-    else { Object.assign(result, { resolved: false, reason: "no_completed_scan_on_branch", branch, next: "The requested branch has no completed scan. Show branches_with_scans (branch, latest scan date) as a numbered list and ask which to use; rerun with --branch." }); if (!quiet) emit(result); return result; }
-  } else if (!withScans.length) {
-    Object.assign(result, { resolved: false, reason: "no_completed_scans", next: "This project has no completed scans yet. Tell the developer; nothing to fix until a scan completes." }); if (!quiet) emit(result); return result;
-  } else if (withScans.length === 1) { chosen = withScans[0]; how = "only_branch_with_scans"; }
-  else {
-    const local = withScans.find((e) => guess.branch && e.branch === guess.branch);
-    if (local) { chosen = local; how = "matches_local_branch"; }
-    else { Object.assign(result, { resolved: false, reason: "branch_choice_needed", local_branch: guess.branch || null, suggested: withScans[0].branch, next: "The local branch has no completed scan but several branches do. Show branches_with_scans as a numbered list with each latest scan date, mark 'suggested' (the most recent) as the default, and ask which to use; rerun with --branch." }); if (!quiet) emit(result); return result; }
+    [chosen, how] = await pick(branch, "requested");
+    if (!chosen) {
+      const [withScans, nTotal] = await branchesWithScans(cx, proj.id);
+      Object.assign(result, { resolved: false, reason: "no_completed_scan_on_branch", branch, branches_with_scans: withScans, branches_total: nTotal, next: "The requested branch has no completed scan. Show branches_with_scans (branch, latest scan date) as a numbered list, mention they can type another branch name, and ask which to use; rerun with --branch." });
+      if (!quiet) emit(result); return result;
+    }
+  } else if (guess.branch && guess.branch !== "HEAD") {
+    [chosen, how] = await pick(guess.branch, "matches_local_branch");
+  }
+  if (!chosen) {
+    const [withScans, nTotal] = await branchesWithScans(cx, proj.id);
+    Object.assign(result, { branches_with_scans: withScans, branches_total: nTotal });
+    if (!withScans.length) { Object.assign(result, { resolved: false, reason: "no_completed_scans", next: "This project has no completed scans yet. Tell the developer; nothing to fix until a scan completes." }); if (!quiet) emit(result); return result; }
+    if (nTotal === 1) { chosen = withScans[0]; how = "only_branch_with_scans"; }
+    else {
+      Object.assign(result, { resolved: false, reason: "branch_choice_needed", local_branch: guess.branch || null, suggested: withScans[0].branch, next: "The local branch has no completed scan but other branches do. Show branches_with_scans (the most recently scanned, up to 10) as a numbered list with each latest scan date, mark 'suggested' (the most recent) as the default, say they can also type any other branch name, and ask which to use; rerun with --branch." });
+      if (!quiet) emit(result); return result;
+    }
   }
   Object.assign(result, { resolved: true, branch: chosen.branch, branch_selected_by: how, branch_note: chosen.note, scan: chosen.latest_scan });
   if (!quiet) emit(result); return result;

@@ -45,10 +45,12 @@ ignore stderr progress lines.
    - reason `no_completed_scans`: this project has no completed scan yet.
      Say so and stop; there is nothing to fix until a scan completes.
    - reason `branch_choice_needed`: the developer's local branch has no scan
-     but several branches do. Show `branches_with_scans` as a numbered list,
-     each with its `latest_scan.created_at` date, and say which one is
-     `suggested` (the most recent). Ask which to use. Rerun with
-     `--branch "<name>"`. Never pick one yourself.
+     but other branches do. Show `branches_with_scans` (the most recently
+     scanned branches, at most 10; `branches_total` says how many exist) as
+     a numbered list, each with its `latest_scan.created_at` date, say which
+     one is `suggested` (the most recent), and say they can also type any
+     other branch name. Ask which to use. Rerun with `--branch "<name>"`.
+     Never pick one yourself.
    - reason `no_completed_scan_on_branch`: a `--branch` you passed has no
      completed scan. Show the list as above and ask.
    - `"resolved": true`: proceed. State in one line which scan is being used:
