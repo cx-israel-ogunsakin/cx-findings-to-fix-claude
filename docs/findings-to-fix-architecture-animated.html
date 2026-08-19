@@ -623,9 +623,8 @@ footer{border-top:1px solid var(--line);padding:26px 0 44px;color:var(--dim);fon
   <p class="lede">
     <strong>cx-findings-to-fix</strong> is a Claude Code plugin, used from the terminal or through the
     Claude Code VS Code and JetBrains extensions.
-    Scans run from the customer's CI/CD pipeline against the code in Bitbucket, and <strong>AI Auto Triage</strong>
-    reviews the critical and high findings, marking true positives <code>Confirmed</code> and marking noise
-    <code>Proposed Not Exploitable</code>. The plugin starts from that verdict: the
+    Scans run from the customer's CI/CD pipeline against the code in Bitbucket, and <strong>Triage Assist</strong>
+    evaluates the critical and high findings using Attackability-based context (reachability, exploitability, code context, policy signals), updating the state of findings that require action to <code>Confirmed</code> and theoretical ones to <code>Proposed Not Exploitable</code>. The plugin starts from that verdict: the
     <code>/cx-findings-to-fix:fix</code> command, a subagent and a skill carrying the same protocol, and one small
     tool (<code>ftf</code>, shipped in Python and Node) that calls the Checkmarx One REST API and brings each fix
     into the editor as a change the developer accepts or rejects.
@@ -731,7 +730,7 @@ footer{border-top:1px solid var(--line);padding:26px 0 44px;color:var(--dim);fon
           <button class="node n-agent" data-id="triage" style="left:800px;top:244px;width:292px;height:96px">
             <span class="flag">platform agent</span>
             <span class="ico"><svg viewBox="0 0 24 24"><use href="#i-spark"/></svg></span>
-            <span class="tx"><span class="nt">AI Auto Triage</span><span class="ns">runs when a scan completes</span></span>
+            <span class="tx"><span class="nt">Triage Assist</span><span class="ns">runs when a scan completes</span></span>
           </button>
 
           <button class="node n-agent" data-id="remediation" style="left:800px;top:400px;width:292px;height:104px">
@@ -858,8 +857,7 @@ footer{border-top:1px solid var(--line);padding:26px 0 44px;color:var(--dim);fon
   <div class="callout">
     <h5><svg viewBox="0 0 24 24"><use href="#i-ban"/></svg>What the plugin cannot do</h5>
     <p>The plugin reads findings and fetches fixes. It cannot change a finding&#39;s state, trigger a scan, or touch
-    Checkmarx configuration. AI Auto Triage owns the verdicts: it runs when a scan completes, marks true positives
-    <code>Confirmed</code> and marks noise <code>Proposed Not Exploitable</code>.</p>
+    Checkmarx configuration. Triage Assist owns the verdicts: it evaluates eligible findings for Attackability on the platform, updates the state of findings that require action to <code>Confirmed</code> and theoretical ones to <code>Proposed Not Exploitable</code>, and leaves previously triaged findings unchanged.</p>
     <p>Every change to code arrives as an edit the developer accepts or rejects. The tool writes nothing into the
     project on its own during the normal flow, and the plugin never commits or pushes. Only Confirmed critical and
     high findings are considered. Package (SCA) fixes are supported and off by default.</p>
@@ -923,7 +921,7 @@ const NODE_DETAIL = {
     body:"SAST and SCA run for the scan. The findings land in the findings store.",
     controls:["Started by the scan orchestrator",
               "Writes findings into the findings store",
-              "Scan completion is what starts AI Auto Triage"],
+              "Scan completion is what starts Triage Assist"],
     boundary:"Engine results reach the editor only through the Checkmarx One REST API."
   },
   findings:{
@@ -931,14 +929,14 @@ const NODE_DETAIL = {
     tags:[["Checkmarx One","b"],["State \u00b7 severity \u00b7 engine","t"]],
     body:"Holds the findings with their state, severity and engine type. The verdict is written here, and this is what the tool reads back.",
     controls:["Written by the scan engines",
-              "Marked Confirmed or Proposed Not Exploitable by AI Auto Triage",
+              "Marked Confirmed or Proposed Not Exploitable by Triage Assist",
               "Read through the Checkmarx One REST API"],
     boundary:"The plugin reads findings and cannot change a finding's state."
   },
   triage:{
-    title:"AI Auto Triage", kind:"n-agent",
+    title:"Triage Assist", kind:"n-agent",
     tags:[["Runs on scan completion","v"],["Critical and high","v"],["Owns finding state","r"]],
-    body:"Runs automatically when a scan completes. It reviews critical and high findings, marks true positives Confirmed, and marks noise Proposed Not Exploitable.",
+    body:"Evaluates eligible critical and high findings on the platform using Attackability-based context: reachability, exploitability, code context, and policy signals. Findings that require action have their state updated to Confirmed; theoretical ones to Proposed Not Exploitable. Previously triaged findings are left unchanged.",
     controls:["Started by scan completion",
               "Writes the verdicts into the findings store",
               "Only Confirmed critical and high findings are fixed later"],
@@ -1134,8 +1132,8 @@ const SCENARIOS = {
        text:"The developer pushes code or opens a pull request on <em>Bitbucket</em>. The CI/CD pipeline triggers a Checkmarx One scan for that project and branch."},
       {edges:["run"], focus:"engines", chips:["SAST","SCA"], dur:2000, title:"SAST and SCA run",
        text:"The <em>SAST</em> and <em>SCA</em> engines run for the scan. The findings land in the findings store."},
-      {edges:["verdict"], focus:"triage", dur:2400, title:"AI Auto Triage writes verdicts",
-       text:"The scan completes and <em>AI Auto Triage</em> evaluates the critical and high findings: true positives become <code>Confirmed</code>, noise becomes <code>Proposed Not Exploitable</code>. <em>The platform stage ends here</em>, with no developer involvement so far."},
+      {edges:["verdict"], focus:"triage", dur:2400, title:"Triage Assist writes verdicts",
+       text:"The scan completes and <em>Triage Assist</em> evaluates the critical and high findings for Attackability (reachability, exploitability, code context, policy signals). Findings that require action have their state updated to <code>Confirmed</code>; theoretical ones to <code>Proposed Not Exploitable</code>. <em>The platform stage ends here</em>, with no developer involvement so far."},
       {edges:["ask"], focus:"cmd", dur:2100, title:"Developer runs the command",
        text:"<em>The developer stage begins.</em> The developer runs <code>/cx-findings-to-fix:fix</code> in <em>Claude Code</em>, optionally with the project name and branch after it. A subagent and a skill carry the same protocol."},
       {edges:["resolve"], focus:"ftf", chips:["project lookup","scans"], dur:2300,
@@ -1566,7 +1564,7 @@ let hotChips = [];
 const CAPTION_IDLE = '<span class="cn">Ready</span>Play the lifecycle to trace it end to end: the platform stage runs the scan and writes verdicts, then the developer stage turns a <em>Confirmed</em> finding into a reviewed edit in the editor.';
 
 const FINISH_CAPTION = {
-  life: '<span class="cn">Sequence complete</span>A push produced a scan, AI Auto Triage confirmed the real findings, and the plugin turned those verdicts into fixes the developer accepted or rejected file by file. Two steps left the workstation, both along one path: the <em>ftf</em> tool to the Checkmarx One REST API, carrying a short-lived token Claude never holds.'
+  life: '<span class="cn">Sequence complete</span>A push produced a scan, Triage Assist confirmed the real findings, and the plugin turned those verdicts into fixes the developer accepted or rejected file by file. Two steps left the workstation, both along one path: the <em>ftf</em> tool to the Checkmarx One REST API, carrying a short-lived token Claude never holds.'
 };
 
 function steps(){ return scen ? SCENARIOS[scen].steps : []; }

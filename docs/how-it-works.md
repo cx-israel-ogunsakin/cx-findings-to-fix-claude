@@ -1,10 +1,16 @@
 # Findings-to-Fix: how it works
 
-Findings-to-Fix brings two Checkmarx One AI agents into Claude Code: AI Auto
-Triage decides which findings are real, and Remediation Assist generates the
-fix. The plugin brings that fix to the developer as a change they review and
-accept or reject. (A GitHub Copilot version of the same plugin exists as a
-separate repository.) This document describes the pieces, the sequence,
+Findings-to-Fix builds on Checkmarx One Triage Assist and Remediation Assist.
+Triage Assist has already evaluated the findings on the platform using
+Attackability-based context (reachability, exploitability, code context, policy
+signals) and confirmed the ones that require action. The plugin takes only those
+confirmed findings, asks Remediation Assist to generate the review-ready fix, and
+brings it to the developer in Claude Code as a change they review and
+accept or reject. Remediation Assist can open review-ready fix pull requests
+for supported GitHub Code Repository Integration projects; for every other
+project type, this plugin is how that fix reaches the editor. The agent
+proposes; the developer approves. (A GitHub Copilot version of the same plugin
+exists as a separate repository.) This document describes the pieces, the sequence,
 and the boundaries.
 
 ## The pieces
@@ -13,9 +19,12 @@ and the boundaries.
 
 - Scans run on each push or pull request, triggered from the customer's CI/CD
   pipeline against the code in Bitbucket.
-- AI Auto Triage runs automatically when a scan completes. It reviews critical
-  and high findings, marks true positives **Confirmed**, and marks noise
-  **Proposed Not Exploitable**. Nothing in the plugin changes these verdicts.
+- Triage Assist evaluates eligible findings using Attackability-based context
+  (reachability, exploitability, code context, policy signals), on the platform
+  and on the cadence AppSec configures. It marks findings that require action
+  **Confirmed** and theoretical ones **Proposed Not Exploitable**; previously
+  triaged findings are left unchanged. Nothing in the plugin changes these
+  verdicts.
 - Remediation Assist generates a code fix for a finding on request: the changed
   files as diffs, a short explanation (what, why, how), and unit tests that
   exercise the fix.

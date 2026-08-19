@@ -1,15 +1,19 @@
 # Findings-to-Fix for Claude Code
 
-Two Checkmarx One AI agents, working inside Claude Code: **AI Auto Triage**
-decides which findings are real, and **Remediation Assist** generates the fix.
-You review each change as a diff and accept or reject it.
+Built on Checkmarx One **Triage Assist** and **Remediation Assist**, working inside
+Claude Code. Triage Assist has already evaluated the findings on the platform
+using Attackability-based context (reachability, exploitability, code context,
+policy signals) and confirmed the ones that require action. The plugin takes only
+those confirmed findings, asks Remediation Assist to generate the review-ready
+fix, and shows you each change as a diff to accept or reject. The agent proposes;
+you approve.
 
-You run one command. It pulls only the findings AI Auto Triage has confirmed,
+You run one command. It pulls only the findings Triage Assist has confirmed,
 asks Remediation Assist for the fix, and Claude shows you each change. That is
 the whole thing.
 
 Using GitHub Copilot instead? Use
-[cx-findings-to-fix](https://github.com/cx-israel-ogunsakin/cx-findings-to-fix:fix),
+[cx-findings-to-fix](https://github.com/cx-israel-ogunsakin/cx-findings-to-fix),
 the Copilot version of this same plugin.
 
 <p align="center">
@@ -80,7 +84,7 @@ Nothing is committed or pushed. You review, then commit as usual.
 
 ## Good to know
 
-- Only findings that Checkmarx AI Auto Triage has marked **Confirmed**, at
+- Only findings that Checkmarx Triage Assist has marked **Confirmed**, at
   critical or high severity, are fixed. Nothing else is touched.
 - If you edited a file near the vulnerable code since the last scan, Claude
   places the fix into your current code by hand instead of applying it
