@@ -1,10 +1,10 @@
 # Findings-to-Fix: how it works
 
-Findings-to-Fix lets a developer fix confirmed Checkmarx One security findings
-from a terminal or editor using Claude Code. (A GitHub Copilot version of the
-same plugin exists as a separate repository.) Checkmarx generates the fix on the
-platform; the plugin brings it into the editor as a change the developer
-reviews and keeps or undoes. This document describes the pieces, the sequence,
+Findings-to-Fix brings two Checkmarx One AI agents into Claude Code: AI Auto
+Triage decides which findings are real, and Remediation Assist generates the
+fix. The plugin brings that fix to the developer as a change they review and
+accept or reject. (A GitHub Copilot version of the same plugin exists as a
+separate repository.) This document describes the pieces, the sequence,
 and the boundaries.
 
 ## The pieces
