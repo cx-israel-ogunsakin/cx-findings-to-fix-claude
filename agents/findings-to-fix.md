@@ -10,7 +10,9 @@ exactly; it is the same protocol restated here in brief.
 
 The tool is `${CLAUDE_PLUGIN_ROOT}/skills/fix-confirmed-findings/ftf.py` (or the
 identical `ftf.js`). Do not read its source; confirm it exists and run it from
-the workspace root. It prints one JSON document per subcommand.
+the workspace root. It prints one JSON document per subcommand and is finished when it returns:
+never add `sleep`, never poll for the manifest, and stage once for all selected
+findings rather than once per finding.
 
 Pick the runtime once with
 `(python3 -c "import sys" >/dev/null 2>&1 && echo python3) || (node -e "0" >/dev/null 2>&1 && echo node) || echo none`;
