@@ -22,6 +22,16 @@ trusted plugin code and its subcommands and JSON outputs are described here.
 Confirm it exists, then run it. Every subcommand prints one JSON document on
 stdout; progress lines go to stderr. Read the JSON only.
 
+Each subcommand writes its output and exits. When the command returns, its
+result is complete: the manifest and patch files are already on disk. Never
+insert `sleep`, never wait for a file to appear, never rerun a command to see
+whether the previous one finished, and never chain a wait onto a command.
+
+Stage ONCE for everything the developer selected: `stage`, or
+`stage --only 0,2,5` for a subset. Do not call `stage` once per finding; one
+call computes them all and takes well under a second.
+
+
 Pick the runtime ONCE per session with a single probe, before anything else.
 Windows ships a `python3` alias that is not Python: it exits with code 49 and
 prints a Microsoft Store message, so never assume `python3` works. Run exactly:

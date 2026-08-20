@@ -49,6 +49,16 @@ start it.
 Every subcommand prints one JSON document to stdout. Read only that JSON;
 ignore stderr progress lines.
 
+Each subcommand writes its output and exits. When the command returns, its
+result is complete: the manifest and patch files are already on disk. Never
+insert `sleep`, never wait for a file to appear, never rerun a command to see
+whether the previous one finished, and never chain a wait onto a command.
+
+Stage ONCE for everything the developer selected: `stage`, or
+`stage --only 0,2,5` for a subset. Do not call `stage` once per finding; one
+call computes them all and takes well under a second.
+
+
 ## Steps
 
 1. **Resolve and fetch.** Run `run` with no arguments. The tool
