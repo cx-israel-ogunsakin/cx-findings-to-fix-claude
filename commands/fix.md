@@ -22,14 +22,35 @@ trusted plugin code and its subcommands and JSON outputs are described here.
 Confirm it exists, then run it. Every subcommand prints one JSON document on
 stdout; progress lines go to stderr. Read the JSON only.
 
+Pick the runtime ONCE per session with a single probe, before anything else.
+Windows ships a `python3` alias that is not Python: it exits with code 49 and
+prints a Microsoft Store message, so never assume `python3` works. Run exactly:
+
+```
+(python3 -c "import sys" >/dev/null 2>&1 && echo python3) || (node -e "0" >/dev/null 2>&1 && echo node) || echo none
+```
+
+It prints one word. `python3` means run `python3 "$FTF"`; `node` means run
+`node "${FTF%.py}.js"`; `none` means tell the developer the plugin needs
+Python 3.8+ or Node 18+ on the PATH, and stop. Remember the winner and use it
+for every command in this session. Mention it once, in passing, only if it is
+Node ("Python is not on this PATH, using the Node build").
+
 Set FTF once for the session and run everything from the workspace root of the
 repository being fixed:
 
 ```
 FTF="${CLAUDE_PLUGIN_ROOT}/skills/fix-confirmed-findings/ftf.py"
-python3 "$FTF" run              # or: node "${FTF%.py}.js" run   if python3 is missing
+python3 "$FTF" run        # or: node "${FTF%.py}.js" run   per the probe above
 python3 "$FTF" stage
 ```
+
+`run` can take two to three minutes when Remediation Assist generates fixes for
+the first time. Call it in the FOREGROUND with a Bash timeout of 600000 ms. Do
+not run it in the background, do not poll for it, and do not start a second
+command while it is running. Before you call it, tell the developer in one line
+that fetching the fixes takes two to three minutes the first time, so the wait
+is expected.
 
 If `$ARGUMENTS` is non-empty, treat the first word as the Checkmarx One project
 name and the second (if any) as the branch, and pass them as `--project` and

@@ -34,7 +34,7 @@ import urllib.request
 import zipfile
 
 USER_AGENT = "cx-findings-to-fix/0.1"
-POLL_INITIAL = 10      # seconds between polls (backs off to POLL_MAX)
+POLL_INITIAL = 5       # seconds before the first poll (backs off to POLL_MAX)
 POLL_MAX = 30
 POLL_TIMEOUT = 900     # 15 minutes per finding
 MAX_WORKERS = 8

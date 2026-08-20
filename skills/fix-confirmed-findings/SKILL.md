@@ -30,6 +30,22 @@ node "${FTF%.py}.js" <subcommand> ...   # otherwise
 Do not read the script's source code; it is trusted plugin code and its
 subcommands and outputs are described here. Confirm the file exists, then run it.
 
+Pick the runtime once per session with a single probe (Windows ships a `python3`
+alias that is not Python and exits 49):
+
+```
+(python3 -c "import sys" >/dev/null 2>&1 && echo python3) || (node -e "0" >/dev/null 2>&1 && echo node) || echo none
+```
+
+`python3` means run `python3 "<path>"`; `node` means run the `.js` file beside
+it with node; `none` means tell the developer Python 3.8+ or Node 18+ is needed
+and stop.
+
+`run` can take two to three minutes when fixes are generated for the first time.
+Call it in the foreground with a Bash timeout of 600000 ms; do not background it
+or poll. Tell the developer in one line that the wait is expected before you
+start it.
+
 Every subcommand prints one JSON document to stdout. Read only that JSON;
 ignore stderr progress lines.
 

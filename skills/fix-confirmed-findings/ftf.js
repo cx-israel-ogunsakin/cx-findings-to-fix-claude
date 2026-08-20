@@ -22,7 +22,7 @@ const zlib = require("zlib");
 const { spawnSync } = require("child_process");
 
 const USER_AGENT = "cx-findings-to-fix/0.1";
-const POLL_INITIAL = 10_000, POLL_MAX = 30_000, POLL_TIMEOUT = 900_000, MAX_WORKERS = 8, HTTP_TIMEOUT = 60_000;
+const POLL_INITIAL = 5_000, POLL_MAX = 30_000, POLL_TIMEOUT = 900_000, MAX_WORKERS = 8, HTTP_TIMEOUT = 60_000;
 const FILE_MODE = 0o600;   // owner read/write only: patches and manifests carry tenant source code
 const DIR_MODE = 0o700;
 const HOME = path.normalize(path.resolve(os.homedir()));
