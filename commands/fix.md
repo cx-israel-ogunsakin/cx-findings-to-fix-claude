@@ -49,8 +49,9 @@ python3 "$FTF" stage
 the first time. Call it in the FOREGROUND with a Bash timeout of 600000 ms. Do
 not run it in the background, do not poll for it, and do not start a second
 command while it is running. Before you call it, tell the developer in one line
-that fetching the fixes takes two to three minutes the first time, so the wait
-is expected.
+that fetching the fixes takes two to three minutes when Remediation Assist has
+to generate them, so the wait is expected. The tool never generates anything
+without asking first (see the credits step below).
 
 If `$ARGUMENTS` is non-empty, treat the first word as the Checkmarx One project
 name and the second (if any) as the branch, and pass them as `--project` and
@@ -84,6 +85,15 @@ name and the second (if any) as the branch, and pass them as `--project` and
      uploaded without branch information (zip uploads, some CI and monorepo
      setups); it is normal.
    - `"ok": false`: show `message` and `hint` verbatim and stop.
+   The manifest also has a `credits` block. Relay it in one line: how many
+   findings already have a fix (free to fetch) and how many do not. If
+   `credits.consent_required` is true the tool STOPPED before generating
+   anything and spent nothing: say that generating the missing fixes runs
+   Checkmarx Remediation Assist and consumes Checkmarx Credits, give the
+   counts, and ask whether to go ahead. On a yes, rerun the same command with
+   `--generate`. On a no, continue with the fixes that already exist (the
+   `NOT_GENERATED` entries are the ones that were not generated). Never pass
+   `--generate` without the developer saying yes in this conversation.
    The manifest also has a `scope` block. If `scope.applied` is true the tool
    limited the findings to the folder the developer has open (monorepos):
    relay `scope.note` so they know, and that `--scope all` shows everything.

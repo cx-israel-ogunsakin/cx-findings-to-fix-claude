@@ -88,6 +88,10 @@ Nothing is committed or pushed. You review, then commit as usual.
 
 - Only findings that Checkmarx Triage Assist has marked **Confirmed**, at
   critical or high severity, are fixed. Nothing else is touched.
+- Generating a fix runs Checkmarx Remediation Assist and consumes Checkmarx
+  Credits. The plugin never generates one without asking: it tells you how
+  many findings already have a fix (free to fetch) and how many would need
+  generating, and waits for your yes. Claude says so before anything is spent.
 - If you edited a file near the vulnerable code since the last scan, Claude
   places the fix into your current code by hand instead of applying it
   blindly, and tells you so. Your edits stay.

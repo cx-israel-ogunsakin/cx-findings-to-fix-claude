@@ -23,7 +23,10 @@ that the wait is expected.
    only branch with scans (often `.unknown`, normal for zip uploads and
    monorepos; say so) or the local branch's scan; otherwise it returns
    `branches_with_scans` with dates and a `suggested` default. Show them as a
-   numbered list and ask. Never guess. On `project_not_found` show
+   numbered list and ask. Relay the `credits` block: if `consent_required` is
+   true, nothing was generated and nothing was spent; say how many fixes would
+   have to be generated, that this consumes Checkmarx Credits, and ask before
+   rerunning with `--generate`. Never guess. On `project_not_found` show
    `candidates` and ask. Rerun with `--project` / `--branch`. State which scan
    is used (branch, date). If `scope.applied`, relay `scope.note`.
 2. Show `results` as a table and ask which fixes to apply (default: all READY).
