@@ -90,7 +90,9 @@ ignore stderr progress lines.
    (`file_changes[].file_path`). Include each `summary` in one line. If
    `findings_total` is 0, say the branch has no CONFIRMED critical/high findings
    and stop.
-4. **Confirm scope.** Ask which fixes to apply. Default is all with status READY.
+4. **Confirm scope.** Ask which findings to prepare fixes for, not for blanket
+   permission to write. Default is all with status READY; each file still
+   arrives as its own reviewable edit.
 5. **Stage.** Run `stage` (optionally `--only 0,2`) from the same workspace
    root. It computes each fix against the developer's current files and writes
    nothing into the workspace. `ready` entries carry `patched_path` (the full
@@ -103,10 +105,10 @@ ignore stderr progress lines.
    and its one-line summary, then ask the developer to review and accept or reject each one.
 7. **Drifted files (`needs_assist`):** read `patch_path` and the local file.
    If the change is already present locally, do not edit; report it as
-   "already in place locally". Otherwise propose the same change where the
-   code lives now as an editor edit, preserving local edits, without adding
-   any import or dependency the patch does not add, and say plainly the fix
-   was placed by hand. Overwriting with the platform's whole file is only on
+   "already in place locally". Otherwise show the intended before and after
+   first, then propose the same change where the code lives now as an editor
+   edit, preserving local edits, without adding any import or dependency the
+   patch does not add, and say plainly the fix was placed by hand. Overwriting with the platform's whole file is only on
    explicit request (`apply --overwrite --only <index>`).
 8. **Test files are platform files; never author tests.** The platform's
    generated tests arrive in the manifest like any other file change (paths
@@ -122,7 +124,9 @@ ignore stderr progress lines.
    stop. Never run a test command yourself, install dependencies, edit package
    files, or create a runner or test. Do not volunteer that you did not run
    tests.
-11. **Stop.** Do not commit or push.
+11. **Close.** Say what landed and how to review it: working-tree edits,
+   nothing staged, committed, or pushed; point at `git diff` or the
+   source-control view. If any edit applied without a prompt, say so. Then stop.
 
 ## Rules
 
