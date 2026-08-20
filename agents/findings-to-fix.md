@@ -12,6 +12,13 @@ The tool is `${CLAUDE_PLUGIN_ROOT}/skills/fix-confirmed-findings/ftf.py` (or the
 identical `ftf.js`). Do not read its source; confirm it exists and run it from
 the workspace root. It prints one JSON document per subcommand.
 
+Pick the runtime once with
+`(python3 -c "import sys" >/dev/null 2>&1 && echo python3) || (node -e "0" >/dev/null 2>&1 && echo node) || echo none`;
+Windows ships a `python3` alias that is not Python and exits 49, so never assume
+it works. Run `run` in the foreground with a Bash timeout of 600000 ms (fresh
+fixes take two to three minutes); never background it or poll, and say up front
+that the wait is expected.
+
 1. `python3 "$FTF" run` resolves the project from git and picks the scan: the
    only branch with scans (often `.unknown`, normal for zip uploads and
    monorepos; say so) or the local branch's scan; otherwise it returns

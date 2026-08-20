@@ -43,8 +43,10 @@ Findings-to-Fix reads it from either place. It never shows the key to Claude.
 
 ### 2. Python or Node on your machine
 
-Either one works. Most Macs and Linux machines already have Python 3. On
-Windows, if you have `python3` or `node` in a terminal, you are set.
+Either one works, and the plugin picks whichever it finds. Most Macs and Linux
+machines already have Python 3. On Windows, note that a fresh machine has a
+`python3` that is only a Microsoft Store shortcut, not Python; the plugin
+detects that and uses Node instead, so having Node installed is enough.
 
 ### 3. Install the plugin
 
