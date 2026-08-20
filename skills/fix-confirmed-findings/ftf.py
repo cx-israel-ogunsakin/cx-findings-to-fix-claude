@@ -451,6 +451,31 @@ def apply_scope(findings, repo_root, scope):
     return kept, info
 
 
+def has_existing_fix(cx, scan_id, f):
+    """True when Remediation Assist has already generated a fix for this finding.
+    HTTP 200 with a data payload means it exists (free to fetch); 404 means generating it
+    would consume Checkmarx Credits."""
+    st, body = cx.get(f"/api/remediation/remediation-details/{scan_id}/{urllib.parse.quote(f['alternate_id'], safe='')}")
+    if st != 200 or not isinstance(body, dict):
+        return False
+    res = (body.get("results") or [{}])[0]
+    return bool(res.get("data"))
+
+
+def preflight(cx, scan_id, findings):
+    """Split findings into those that already have a fix and those that would need one
+    generated. Runs in parallel; one cheap GET per finding."""
+    have = set()
+    if not findings:
+        return have
+    with cf.ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(findings))) as ex:
+        futs = {ex.submit(has_existing_fix, cx, scan_id, f): f for f in findings}
+        for fut in cf.as_completed(futs):
+            if fut.result():
+                have.add(futs[fut]["alternate_id"])
+    return have
+
+
 def initiate(cx, scan_id, findings):
     buckets = {}
     for f in findings:
@@ -497,7 +522,7 @@ def poll_one(cx, scan_id, f):
         delay = min(POLL_MAX, delay + 5)
 
 
-def cmd_remediate(cx, scan_id, severities, engines, out_dir, quiet=False, meta=None, scope="auto"):
+def cmd_remediate(cx, scan_id, severities, engines, out_dir, quiet=False, meta=None, scope="auto", generate=False):
     log.info("listing CONFIRMED findings for scan %s… (severity=%s; engines=%s)",
              scan_id[:8], ",".join(severities), ",".join(engines) or "all")
     findings = list_confirmed(cx, scan_id, severities, engines)
@@ -517,17 +542,49 @@ def cmd_remediate(cx, scan_id, severities, engines, out_dir, quiet=False, meta=N
         _write_manifest(manifest, out_dir, quiet)
         return manifest
 
-    sub = initiate(cx, scan_id, findings)
-    manifest["submission"] = sub
-    log.info("remediation submitted: %s", sub)
+    have = preflight(cx, scan_id, findings)
+    need = [f for f in findings if f["alternate_id"] not in have]
+    manifest["credits"] = {
+        "findings_total": len(findings),
+        "fixes_already_generated": len(findings) - len(need),
+        "fixes_to_generate": len(need),
+        "note": ("Remediation Assist generates a fix for any finding that does not already have one, "
+                 "which consumes Checkmarx Credits. Fixes that already exist are fetched at no cost."),
+    }
+    log.info("credits: %d of %d finding(s) already have a fix; %d would need generating",
+             len(findings) - len(need), len(findings), len(need))
 
-    log.info("polling %d finding(s) in parallel (up to %d workers)…", len(findings), MAX_WORKERS)
-    with cf.ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(findings))) as ex:
-        futs = {ex.submit(poll_one, cx, scan_id, f): f for f in findings}
-        for fut in cf.as_completed(futs):
-            r = fut.result()
-            log.info("  %-8s %-4s %-32s -> %s (%ss)", r["severity"], r["engine"], r["query"][:32], r["status"], r.get("elapsed_s", 0))
-            manifest["results"].append(r)
+    if need and not generate:
+        # Never spend Checkmarx Credits without an explicit yes. Return what already exists,
+        # report the rest, and let the agent ask.
+        manifest["credits"]["consent_required"] = True
+        manifest["submission"] = {"submitted": 0, "reason": "consent_required"}
+        manifest["next"] = (f"{len(need)} of {len(findings)} finding(s) have no fix yet. Generating them runs "
+                            "Checkmarx Remediation Assist and consumes Checkmarx Credits. Tell the developer the "
+                            "counts, ask whether to generate them, and on a yes rerun the same command with "
+                            "--generate. Fixes that already exist are included below and cost nothing.")
+        for f in need:
+            manifest["results"].append({**f, "status": "NOT_GENERATED",
+                                        "note": "No fix exists yet; generating one consumes Checkmarx Credits."})
+        log.info("stopping before generating: rerun with --generate to spend credits on %d fix(es)", len(need))
+        findings = [f for f in findings if f["alternate_id"] in have]
+    elif need:
+        sub = initiate(cx, scan_id, need)
+        manifest["submission"] = sub
+        manifest["credits"]["credits_consumed_for"] = len(need)
+        log.info("generating %d fix(es) (consumes Checkmarx Credits): %s", len(need), sub)
+    else:
+        manifest["submission"] = {"submitted": 0, "note": "every finding already had a fix; nothing was generated"}
+        log.info("every finding already had a fix; nothing generated, no credits consumed")
+
+    if findings:
+        log.info("fetching %d fix(es) in parallel (up to %d workers)…", len(findings), MAX_WORKERS)
+        with cf.ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(findings))) as ex:
+            futs = {ex.submit(poll_one, cx, scan_id, f): f for f in findings}
+            for fut in cf.as_completed(futs):
+                r = fut.result()
+                log.info("  %-8s %-4s %-32s -> %s (%ss)", r["severity"], r["engine"], r["query"][:32], r["status"], r.get("elapsed_s", 0))
+                manifest["results"].append(r)
 
     order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
     manifest["results"].sort(key=lambda r: (order.get(r["severity"], 9), r["query"]))
@@ -906,6 +963,8 @@ def main():
         p.add_argument("--severity", nargs="+", default=["CRITICAL", "HIGH"])
         p.add_argument("--engine", nargs="+", default=["sast"], help="sast and/or sca (default: sast)")
         p.add_argument("--out", default=".ftf", help="Directory for manifest and .patch files (default: .ftf)")
+        p.add_argument("--generate", action="store_true",
+                       help="Allow Remediation Assist to generate fixes for findings that do not have one yet. This consumes Checkmarx Credits. Without it the tool fetches only fixes that already exist and reports what generating would cost.")
         p.add_argument("--scope", default="auto",
                        help="Monorepos: 'auto' keeps findings under the folder you have open (default), 'all' keeps every finding, or give a repo-relative subpath")
 
@@ -947,7 +1006,7 @@ def main():
     if a.cmd == "resolve":
         cmd_resolve(cx, a.project, a.branch)
     elif a.cmd == "remediate":
-        cmd_remediate(cx, a.scan_id, [s.upper() for s in a.severity], engines, a.out, scope=a.scope)
+        cmd_remediate(cx, a.scan_id, [s.upper() for s in a.severity], engines, a.out, scope=a.scope, generate=a.generate)
     elif a.cmd == "run":
         res = cmd_resolve(cx, a.project, a.branch, quiet=True)
         if not res.get("resolved"):
@@ -955,7 +1014,8 @@ def main():
             sys.exit(2)
         cmd_remediate(cx, res["scan"]["id"], [s.upper() for s in a.severity], engines, a.out,
                       meta={"project": res["project"], "branch": res["branch"], "branch_selected_by": res.get("branch_selected_by"),
-                            "branch_note": res.get("branch_note"), "scan": res["scan"]}, scope=a.scope)
+                            "branch_note": res.get("branch_note"), "scan": res["scan"]}, scope=a.scope,
+                      generate=a.generate)
 
 
 if __name__ == "__main__":

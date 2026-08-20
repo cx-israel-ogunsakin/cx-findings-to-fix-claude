@@ -250,6 +250,20 @@ function applyScope(findings, repoRoot, scope) {
   return [kept, info];
 }
 
+async function hasExistingFix(cx, scanId, f) {
+  // HTTP 200 with a data payload means Remediation Assist already generated a fix (free to fetch);
+  // 404 means generating it would consume Checkmarx Credits.
+  const [st, body] = await cx.get(`/api/remediation/remediation-details/${scanId}/${encodeURIComponent(f.alternate_id)}`);
+  if (st !== 200 || !body) return false;
+  const res = (body.results || [])[0] || {};
+  return !!res.data;
+}
+async function preflight(cx, scanId, findings) {
+  const have = new Set();
+  if (!findings.length) return have;
+  await runPool(findings, async (f) => { if (await hasExistingFix(cx, scanId, f)) have.add(f.alternate_id); return null; }, MAX_WORKERS);
+  return have;
+}
 async function initiate(cx, scanId, findings) {
   const buckets = {}; for (const f of findings) (buckets[f.engine] ||= []).push(f.alternate_id);
   const payload = { scanID: scanId, buckets: Object.entries(buckets).filter(([e]) => e === "sast" || e === "sca").map(([scannerType, resultIDs]) => ({ scannerType, resultIDs })) };
@@ -283,7 +297,7 @@ async function runPool(items, worker, size) {
   await Promise.all(Array.from({ length: Math.min(size, items.length) }, async () => { while (i < items.length) { const it = items[i++]; out.push(await worker(it)); } }));
   return out;
 }
-async function cmdRemediate(cx, scanId, severities, engines, outDir, quiet = false, meta = {}, scope = "auto") {
+async function cmdRemediate(cx, scanId, severities, engines, outDir, quiet = false, meta = {}, scope = "auto", generate = false) {
   log(`listing CONFIRMED findings for scan ${scanId.slice(0, 8)}… (severity=${severities.join(",")}; engines=${engines.join(",") || "all"})`);
   let findings = await listConfirmed(cx, scanId, severities, engines);
   log(`${findings.length} confirmed finding(s)`);
@@ -292,10 +306,37 @@ async function cmdRemediate(cx, scanId, severities, engines, outDir, quiet = fal
   if (scopeInfo.applied) log(`scope '${scopeInfo.subpath}': ${scopeInfo.findings_in_scope} of ${scopeInfo.findings_total} finding(s)`);
   const manifest = { ok: true, scan_id: scanId, tenant: cx.tenant, base_url: cx.base, repo_root: repoRoot, scope: scopeInfo, filters: { state: ["CONFIRMED"], severity: severities, engines }, findings_total: findings.length, results: [], ...meta };
   if (!findings.length) { manifest.message = "No CONFIRMED findings match the filters. Nothing to fix."; await writeManifest(manifest, outDir, quiet); return manifest; }
-  manifest.submission = await initiate(cx, scanId, findings);
-  log(`remediation submitted: ${JSON.stringify(manifest.submission)}`);
-  log(`polling ${findings.length} finding(s) in parallel (up to ${MAX_WORKERS} workers)…`);
-  manifest.results = await runPool(findings, async (f) => { const r = await pollOne(cx, scanId, f); log(`  ${r.severity.padEnd(8)} ${r.engine.padEnd(4)} ${r.query.slice(0, 32).padEnd(32)} -> ${r.status} (${r.elapsed_s}s)`); return r; }, MAX_WORKERS);
+  const have = await preflight(cx, scanId, findings);
+  const need = findings.filter((f) => !have.has(f.alternate_id));
+  manifest.credits = {
+    findings_total: findings.length,
+    fixes_already_generated: findings.length - need.length,
+    fixes_to_generate: need.length,
+    note: "Remediation Assist generates a fix for any finding that does not already have one, which consumes Checkmarx Credits. Fixes that already exist are fetched at no cost.",
+  };
+  log(`credits: ${findings.length - need.length} of ${findings.length} finding(s) already have a fix; ${need.length} would need generating`);
+  let toFetch = findings;
+  if (need.length && !generate) {
+    // Never spend Checkmarx Credits without an explicit yes.
+    manifest.credits.consent_required = true;
+    manifest.submission = { submitted: 0, reason: "consent_required" };
+    manifest.next = `${need.length} of ${findings.length} finding(s) have no fix yet. Generating them runs Checkmarx Remediation Assist and consumes Checkmarx Credits. Tell the developer the counts, ask whether to generate them, and on a yes rerun the same command with --generate. Fixes that already exist are included below and cost nothing.`;
+    for (const f of need) manifest.results.push({ ...f, status: "NOT_GENERATED", note: "No fix exists yet; generating one consumes Checkmarx Credits." });
+    log(`stopping before generating: rerun with --generate to spend credits on ${need.length} fix(es)`);
+    toFetch = findings.filter((f) => have.has(f.alternate_id));
+  } else if (need.length) {
+    manifest.submission = await initiate(cx, scanId, need);
+    manifest.credits.credits_consumed_for = need.length;
+    log(`generating ${need.length} fix(es) (consumes Checkmarx Credits): ${JSON.stringify(manifest.submission)}`);
+  } else {
+    manifest.submission = { submitted: 0, note: "every finding already had a fix; nothing was generated" };
+    log("every finding already had a fix; nothing generated, no credits consumed");
+  }
+  if (toFetch.length) {
+    log(`fetching ${toFetch.length} fix(es) in parallel (up to ${MAX_WORKERS} workers)…`);
+    const fetched = await runPool(toFetch, async (f) => { const r = await pollOne(cx, scanId, f); log(`  ${r.severity.padEnd(8)} ${r.engine.padEnd(4)} ${r.query.slice(0, 32).padEnd(32)} -> ${r.status} (${r.elapsed_s}s)`); return r; }, MAX_WORKERS);
+    manifest.results.push(...fetched);
+  }
   const order = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
   manifest.results.sort((a, b) => (order[a.severity] ?? 9) - (order[b.severity] ?? 9) || a.query.localeCompare(b.query));
   manifest.ready = manifest.results.filter((r) => r.status === "READY").length;
@@ -574,9 +615,9 @@ function parseArgs(argv) {
   const cx = await CxClient.create();
   const severities = many("severity", ["CRITICAL", "HIGH"]).map((s) => s.toUpperCase());
   const engines = many("engine", ["sast"]).map((e) => e.toLowerCase());
-  const out = one("out", ".ftf"); const scope = one("scope", "auto");
+  const out = one("out", ".ftf"); const scope = one("scope", "auto"); const generate = !!a.generate;
   if (cmd === "resolve") await cmdResolve(cx, one("project"), one("branch"));
-  else if (cmd === "remediate") { const sid = one("scan_id"); if (!sid) die("missing_arg", "--scan-id is required"); await cmdRemediate(cx, sid, severities, engines, out, false, {}, scope); }
+  else if (cmd === "remediate") { const sid = one("scan_id"); if (!sid) die("missing_arg", "--scan-id is required"); await cmdRemediate(cx, sid, severities, engines, out, false, {}, scope, generate); }
   else { const res = await cmdResolve(cx, one("project"), one("branch"), true); if (!res.resolved) { emit(res); process.exit(2); }
-    await cmdRemediate(cx, res.scan.id, severities, engines, out, false, { project: res.project, branch: res.branch, branch_selected_by: res.branch_selected_by, branch_note: res.branch_note, scan: res.scan }, scope); }
+    await cmdRemediate(cx, res.scan.id, severities, engines, out, false, { project: res.project, branch: res.branch, branch_selected_by: res.branch_selected_by, branch_note: res.branch_note, scan: res.scan }, scope, generate); }
 })().catch((e) => die("unexpected", e.message));
