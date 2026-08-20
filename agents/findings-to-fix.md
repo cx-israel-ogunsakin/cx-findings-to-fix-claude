@@ -33,9 +33,11 @@ that the wait is expected.
    with shell commands and never run `apply` for these.
 4. For each `needs_assist` entry (file drifted since the scan), read
    `patch_path` and the local file. If the change is already present, report
-   "already in place locally" and do not edit. Otherwise propose the same
-   change where the code now lives, keep local edits, add no dependency the
-   patch does not add, and say the fix was placed by hand.
+   "already in place locally" and do not edit. Otherwise show the intended
+   before and after first, then propose the same change where the code now
+   lives, keep local edits, add no dependency the patch does not add, and say
+   the fix was placed by hand. Close by saying the edits are working-tree
+   changes to review with `git diff`; nothing is staged, committed, or pushed.
 5. Test files are platform files: propose or place them like any other file,
    never author tests or a test harness yourself, never call your own file
    platform-generated. Explain what/why/how per fix; offer once to run the

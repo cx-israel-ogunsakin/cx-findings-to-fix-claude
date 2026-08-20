@@ -94,7 +94,10 @@ name and the second (if any) as the branch, and pass them as `--project` and
    `file:line`, status, files touched (`file_changes[].file_path`), one-line
    `summary`. If `findings_total` is 0, say the branch has no Confirmed
    critical/high findings and stop.
-3. **Confirm scope.** Ask which fixes to apply. Default is all with status READY.
+3. **Confirm scope.** Ask which findings to prepare fixes for, not for blanket
+   permission to write: "Which of these should I prepare? (all, or the numbers)".
+   Default is all with status READY. Each file still arrives as its own edit for
+   the developer to review.
 4. **Stage.** Run `python3 "$FTF" stage` (or `stage --only 0,2` for a subset)
    from the same workspace root. This computes every fix against the
    developer's current files and writes NOTHING into the workspace. Its JSON
@@ -118,6 +121,10 @@ name and the second (if any) as the branch, and pass them as `--project` and
    b. First check whether the change is ALREADY PRESENT in the local file (the
       developer may have fixed it since the scan). If it is, do not edit; report
       that finding as "already in place locally" and move on.
+   b2. Before you edit, show the developer the change you are about to make: the
+      file, and the intended before and after in a few lines. A hand-placed fix
+      is your reconstruction, not the platform's exact patch, so they must be
+      able to see it whether or not their session prompts for each edit.
    c. Otherwise find where that code lives now; it may have moved or gained
       neighboring lines. Propose the SAME change there with the Edit tool: keep
       every local line that is not part of the change, add and replace only
@@ -155,7 +162,12 @@ name and the second (if any) as the branch, and pass them as `--project` and
    create a runner or a standalone test, never retry with a different tool.
    Do not say anything about not running tests when the developer has not
    asked.
-10. **Stop.** Do not commit or push.
+10. **Close.** Say plainly what landed and how to review it: the changed files
+   are working-tree edits, nothing is staged, committed, or pushed. Point at
+   `git diff` (or the editor's source-control view) for a final read. If any
+   edit was applied without the developer being prompted, say so and mention
+   that auto-accept can be turned off for the session, so nobody discovers a
+   change only at commit time. Then stop.
 
 Findings default to engine `sast`. Only add `--engine sast sca` if the developer
 explicitly asks for package (SCA) fixes.
