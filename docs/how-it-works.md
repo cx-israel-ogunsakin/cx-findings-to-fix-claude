@@ -88,11 +88,14 @@ manifest and the diffs it proposes, never the whole result set.
    the whole repository, the tool limits the findings to that folder and says
    how many the project has in total.
 3. **The tool fetches the fixes.** It lists the findings on the latest
-   completed scan that are Confirmed at critical or high severity, sends them
-   to Remediation Assist in one request, and waits for each fix in parallel.
-   Fresh fixes take two to three minutes; fixes that already exist come back
-   in seconds. The result is a manifest: per finding, the changed files as
-   diffs, the explanation, and the generated tests.
+   completed scan that are Confirmed at critical or high severity and checks
+   which of them already have a fix. Fixes that already exist are fetched at
+   no cost and come back in seconds. If any finding has no fix yet, the
+   assistant stops and asks first: generating a fix runs Remediation Assist
+   and consumes Checkmarx Credits, so nothing is generated without a yes.
+   Fresh fixes take two to three minutes and are fetched in parallel. The
+   result is a manifest: per finding, the changed files as diffs, the
+   explanation, and the generated tests.
 4. **The assistant shows the findings** as a table and asks which to apply.
 5. **The tool computes each fix against the developer's current files**
    without writing anything. For each changed file it produces the complete
@@ -124,6 +127,10 @@ manifest and the diffs it proposes, never the whole result set.
 
 - The plugin reads findings and fetches fixes. It cannot change a finding's
   state, trigger a scan, or touch Checkmarx configuration.
+- A fix is generated only after the developer agrees to spend Checkmarx
+  Credits on it. Fixes that already exist are fetched at no cost.
+- The tool keeps its working files in a `.ftf` folder at the project root; it
+  can be deleted at any time and belongs in `.gitignore`.
 - Every change to code arrives as an editor edit the developer accepts. The
   tool writes nothing into the project on its own during the normal flow.
 - The plugin never commits or pushes.

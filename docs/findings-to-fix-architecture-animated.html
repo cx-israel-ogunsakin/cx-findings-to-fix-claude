@@ -1141,7 +1141,7 @@ const SCENARIOS = {
        text:"Claude runs the <code>ftf</code> tool. It reads the git remote and the current branch and looks the project up in Checkmarx One. On a miss it returns the closest projects, or the branches that have scans, and Claude asks the developer to pick from a numbered list. <em>It never guesses.</em>"},
       {edges:["fixcall","p7"], focus:"remediation", chips:["findings","remediation"], dur:2500,
        toolLabel:"list findings · request fixes", title:"Fixes are generated",
-       text:"The tool lists the <code>Confirmed</code> critical and high findings on the latest completed scan, sends them to <em>Remediation Assist</em> in one request, and waits for each fix in parallel. Two to three minutes for a fresh fix, seconds if it already exists."},
+       text:"The tool lists the <code>Confirmed</code> critical and high findings on the latest completed scan and fetches, at no cost, every fix that already exists. A fix that has to be generated consumes Checkmarx Credits, so Claude asks first. Two to three minutes for a fresh fix, seconds if it already exists."},
       {edges:["reply"], focus:"developer", dur:2200, title:"Findings table, developer picks",
        text:"The manifest comes back: per finding, the changed files as diffs, the explanation, and the generated tests. Claude shows the findings as a table and asks which to apply."},
       {edges:["localfix"], focus:"editor", dur:2500, title:"Fixes arrive as reviewable edits",

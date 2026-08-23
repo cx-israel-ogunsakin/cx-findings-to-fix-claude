@@ -730,7 +730,9 @@ claude plugin install cx-findings-to-fix@cx-findings-to-fix-claude</pre>
   <li><b>The tool asks when it is unsure.</b> If the name matches no project, or the branch
       has no completed scan, Claude shows a numbered list and the developer picks.</li>
   <li><b>The tool fetches the fixes.</b> It lists the Confirmed critical and high findings
-      on the latest completed scan and sends them to Remediation Assist in one request.</li>
+      on the latest completed scan and fetches, at no cost, every fix that already exists.
+      If a finding has no fix yet, Claude asks first: generating one runs Remediation
+      Assist and consumes Checkmarx Credits.</li>
   <li><b>Claude shows the findings</b> as a table and asks which to apply.</li>
   <li><b>The tool computes each fix against the current files</b> without writing anything,
       producing the complete new content for each changed file.</li>
@@ -794,6 +796,8 @@ claude plugin install cx-findings-to-fix@cx-findings-to-fix-claude</pre>
     <ul class="dots small">
       <li>The plugin reads findings and fetches fixes. It cannot change a finding's state,
           trigger a scan, or touch Checkmarx configuration.</li>
+      <li>A fix is generated only after the developer agrees to spend Checkmarx Credits on
+          it. Fixes that already exist are fetched at no cost.</li>
       <li>Every change to code arrives as an edit the developer accepts. The tool writes
           nothing into the project on its own during the normal flow.</li>
       <li>The plugin never commits or pushes.</li>
