@@ -36,7 +36,7 @@ import zipfile
 USER_AGENT = "cx-findings-to-fix/0.1"
 POLL_INITIAL = 5       # seconds before the first poll (backs off to POLL_MAX)
 POLL_MAX = 30
-POLL_TIMEOUT = 900     # 15 minutes per finding
+POLL_TIMEOUT = 480     # per finding; rerunning `run` resumes a killed wait at no cost
 MAX_WORKERS = 8
 HTTP_TIMEOUT = 60
 
@@ -88,6 +88,31 @@ def write_text(candidate, roots, text):
 def write_bytes(candidate, roots, blob):
     with open(contained_path(candidate, *roots), mode="wb") as fh:
         fh.write(blob)
+
+
+def write_private_text(candidate, roots, text):
+    """Owner-only (0600) writes for .ftf outputs: manifests, patches, and platform copies carry tenant source code."""
+    dest = contained_path(candidate, *roots)
+    fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    os.chmod(dest, 0o600)
+
+
+def write_private_bytes(candidate, roots, blob):
+    dest = contained_path(candidate, *roots)
+    fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(blob)
+    os.chmod(dest, 0o600)
+
+
+def makedirs_private(path):
+    os.makedirs(path, exist_ok=True)
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
 
 
 def http_read(url, data=None, headers=None, timeout=HTTP_TIMEOUT):
@@ -459,7 +484,10 @@ def has_existing_fix(cx, scan_id, f):
     if st != 200 or not isinstance(body, dict):
         return False
     res = (body.get("results") or [{}])[0]
-    return bool(res.get("data"))
+    data = res.get("data")
+    # A payload whose data carries an error is a FAILED generation, not a usable fix;
+    # counting it as existing would block regeneration forever.
+    return bool(data) and not (isinstance(data, dict) and data.get("error"))
 
 
 def preflight(cx, scan_id, findings):
@@ -609,8 +637,8 @@ def _save_platform_files(r, index, out_dir):
                 if name.endswith("/"):
                     continue
                 dest = contained_path(os.path.join(base, name), out_dir)
-                os.makedirs(os.path.dirname(dest), exist_ok=True)
-                write_bytes(dest, (out_dir,), z.read(name))
+                makedirs_private(os.path.dirname(dest))
+                write_private_bytes(dest, (out_dir,), z.read(name))
             r["platform_files_dir"] = base
             for c in r.get("file_changes", []):
                 if c.get("file_path") in z.namelist():
@@ -623,7 +651,7 @@ def _save_platform_files(r, index, out_dir):
 def _write_manifest(manifest, out_dir, quiet):
     if out_dir:
         out_dir = contained_path(out_dir, CWD, HOME)
-        os.makedirs(out_dir, exist_ok=True)
+        makedirs_private(out_dir)
         for i, r in enumerate(manifest.get("results", [])):
             if r.get("status") != "READY":
                 continue
@@ -631,12 +659,12 @@ def _write_manifest(manifest, out_dir, quiet):
                 if c.get("diff"):
                     fname = f"{i:02d}-{j}-{os.path.basename(c['file_path'] or 'change')}.patch"
                     patch_path = os.path.join(out_dir, fname)
-                    write_text(patch_path, (out_dir,), c["diff"] if c["diff"].endswith("\n") else c["diff"] + "\n")
+                    write_private_text(patch_path, (out_dir,), c["diff"] if c["diff"].endswith("\n") else c["diff"] + "\n")
                     c["patch_path"] = patch_path
             _save_platform_files(r, i, out_dir)
         manifest_path = os.path.join(out_dir, "ftf-manifest.json")
         manifest["manifest_path"] = manifest_path
-        write_text(manifest_path, (out_dir,), json.dumps(manifest, indent=2))
+        write_private_text(manifest_path, (out_dir,), json.dumps(manifest, indent=2))
     if not quiet:
         emit(manifest)
 
@@ -783,9 +811,9 @@ def cmd_stage(manifest_path, only=None, repo_root=None):
                 })
                 report["needs_assist"].append(entry)
                 continue
-            os.makedirs(staged_dir, exist_ok=True)
+            makedirs_private(staged_dir)
             staged = os.path.join(staged_dir, f"{i:02d}-{j}-{os.path.basename(file_path)}")
-            write_text(staged, (out_dir,), patched)
+            write_private_text(staged, (out_dir,), patched)
             entry.update({"status": "READY", "exists": os.path.isfile(dest), "patched_path": staged,
                           "lines_added": sum(1 for l in diff.splitlines() if l.startswith("+") and not l.startswith("+++")),
                           "lines_removed": sum(1 for l in diff.splitlines() if l.startswith("-") and not l.startswith("---")),
@@ -881,7 +909,9 @@ TEST_TIMEOUT = 300
 
 def detect_test_runner(repo_root):
     """Find the project's OWN test runner. Returns (argv, label) or (None, reason).
-    Never installs anything, never writes anything."""
+    Never installs anything, never writes anything. On Windows npm/mvn/gradle are
+    .cmd/.bat launchers, which need their real names to spawn without a shell."""
+    win = os.name == "nt"
     pj = os.path.join(repo_root, "package.json")
     if os.path.isfile(pj):
         try:
@@ -893,7 +923,7 @@ def detect_test_runner(repo_root):
             return None, f"package.json has no usable test script (scripts.test is {script!r})"
         if not os.path.isdir(os.path.join(repo_root, "node_modules")):
             return None, "node_modules is not installed; run the project's install step (e.g. npm install) first"
-        return ["npm", "test", "--silent"], f"npm test ({script})"
+        return ["npm.cmd" if win else "npm", "test", "--silent"], f"npm test ({script})"
     if any(os.path.isfile(os.path.join(repo_root, f)) for f in ("pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini")) \
             or os.path.isdir(os.path.join(repo_root, "tests")) or os.path.isdir(os.path.join(repo_root, "test")):
         probe = subprocess.run([sys.executable, "-m", "pytest", "--version"], capture_output=True, text=True, check=False)
@@ -901,9 +931,10 @@ def detect_test_runner(repo_root):
             return [sys.executable, "-m", "pytest", "-q"], "python -m pytest"
         return None, "pytest is not installed in this Python environment"
     if os.path.isfile(os.path.join(repo_root, "pom.xml")):
-        return ["mvn", "-q", "test"], "mvn test"
+        return ["mvn.cmd" if win else "mvn", "-q", "test"], "mvn test"
     if os.path.isfile(os.path.join(repo_root, "build.gradle")) or os.path.isfile(os.path.join(repo_root, "build.gradle.kts")):
-        return ["./gradlew", "test"] if os.path.isfile(os.path.join(repo_root, "gradlew")) else ["gradle", "test"], "gradle test"
+        wrapper = os.path.join(repo_root, "gradlew.bat" if win else "gradlew")
+        return [wrapper, "test"] if os.path.isfile(wrapper) else (["gradle.bat" if win else "gradle", "test"]), "gradle test"
     if os.path.isfile(os.path.join(repo_root, "go.mod")):
         return ["go", "test", "./..."], "go test ./..."
     # one level down (monorepo-shaped projects keep the runner in a service folder)

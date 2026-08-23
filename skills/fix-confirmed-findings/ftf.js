@@ -22,7 +22,7 @@ const zlib = require("zlib");
 const { spawnSync } = require("child_process");
 
 const USER_AGENT = "cx-findings-to-fix/0.1";
-const POLL_INITIAL = 5_000, POLL_MAX = 30_000, POLL_TIMEOUT = 900_000, MAX_WORKERS = 8, HTTP_TIMEOUT = 60_000;
+const POLL_INITIAL = 5_000, POLL_MAX = 30_000, POLL_TIMEOUT = 480_000, MAX_WORKERS = 8, HTTP_TIMEOUT = 60_000;
 const FILE_MODE = 0o600;   // owner read/write only: patches and manifests carry tenant source code
 const DIR_MODE = 0o700;
 const HOME = path.normalize(path.resolve(os.homedir()));
@@ -45,14 +45,15 @@ function containedPath(candidate, ...roots) {
   throw new Error(`refusing path outside allowed roots: ${dest}`);
 }
 const readText = (p, roots) => fs.readFileSync(containedPath(p, ...roots), "utf8");
-function writeWithMode(p, roots, data) {
-  // Open with an explicit owner-only mode and write through the descriptor.
-  const fd = fs.openSync(containedPath(p, ...roots), "w", FILE_MODE);
-  try { fs.writeSync(fd, data); fs.fchmodSync(fd, FILE_MODE); } finally { fs.closeSync(fd); }
+function writeWithMode(p, roots, data, mode = FILE_MODE) {
+  // Open with an explicit mode and write through the descriptor. Default is owner-only
+  // (.ftf outputs carry tenant source code); project files pass their own mode.
+  const fd = fs.openSync(containedPath(p, ...roots), "w", mode);
+  try { fs.writeSync(fd, data); fs.fchmodSync(fd, mode); } finally { fs.closeSync(fd); }
 }
 const writeText = (p, roots, t) => writeWithMode(p, roots, Buffer.from(t, "utf8"));
 const writeBytes = (p, roots, b) => writeWithMode(p, roots, b);
-const mkdirp = (p) => fs.mkdirSync(p, { recursive: true, mode: DIR_MODE });
+const mkdirp = (p, mode = DIR_MODE) => fs.mkdirSync(p, { recursive: true, mode });
 
 async function httpRead(url, { method = "GET", body, headers = {}, timeout = HTTP_TIMEOUT } = {}) {
   const ctl = new AbortController();
@@ -86,7 +87,12 @@ class CxClient {
     try {
       const { body } = await httpRead(`${iss}/protocol/openid-connect/token`, { method: "POST", body: form, headers: { "Content-Type": "application/x-www-form-urlencoded" }, timeout: 30_000 });
       tok = JSON.parse(body.toString()).access_token;
-    } catch (e) { log(`token exchange failed: ${e.message}`); die("auth_failed", "Token exchange failed. The API key may be revoked or expired."); }
+    } catch (e) {
+      const msg = String((e && e.cause && (e.cause.code || e.cause.message)) || e.message || e);
+      if (/CERT|certificate/i.test(msg)) die("tls_certificates", "This Node cannot verify HTTPS certificates (no CA bundle). Fix the CA bundle (NODE_EXTRA_CA_CERTS), or run the Python version: python3 ftf.py ...", { detail: msg.slice(0, 200) });
+      if ((e && e.name === "AbortError") || /fetch failed|ENOTFOUND|ECONNREFUSED|EAI_AGAIN|ETIMEDOUT|ECONNRESET/i.test(msg)) die("network", `Could not reach Checkmarx One: ${msg}`);
+      log(`token exchange failed: ${msg}`); die("auth_failed", "Token exchange failed. The API key may be revoked or expired.");
+    }
     const claims = b64json(tok.split(".")[1]);
     c.base = process.env.CX_BASE_URL || claims["ast-base-url"];
     if (!c.base) die("no_base_url", "Could not determine the Checkmarx One base URL; set CX_BASE_URL.");
@@ -103,8 +109,12 @@ class CxClient {
       try { parsed = raw ? JSON.parse(raw) : {}; } catch (e) { log(`non-JSON response (HTTP ${res.status}) from ${p}: ${e.message}`); parsed = { message: raw.slice(0, 300) }; }
       return [res.status, parsed];
     } catch (e) {
-      log(`request failed ${method} ${p}: ${e.message}`);
-      return [0, { message: e.message }];
+      // Same behavior as ftf.py: a transport failure is a network error, never a
+      // tool result the caller could mistake for "not found".
+      const msg = String((e && e.cause && (e.cause.code || e.cause.message)) || e.message || e);
+      if (/CERT|certificate/i.test(msg)) die("tls_certificates", "This Node cannot verify HTTPS certificates (no CA bundle). Fix the CA bundle (NODE_EXTRA_CA_CERTS), or run the Python version: python3 ftf.py ...", { detail: msg.slice(0, 200) });
+      if (e && e.name === "AbortError") die("network", `Checkmarx One did not answer within ${HTTP_TIMEOUT / 1000}s (${method} ${p}).`);
+      die("network", `Could not reach Checkmarx One: ${msg}`);
     } finally { clearTimeout(t); }
   }
   get(p) { return this.call("GET", p); }
@@ -256,7 +266,9 @@ async function hasExistingFix(cx, scanId, f) {
   const [st, body] = await cx.get(`/api/remediation/remediation-details/${scanId}/${encodeURIComponent(f.alternate_id)}`);
   if (st !== 200 || !body) return false;
   const res = (body.results || [])[0] || {};
-  return !!res.data;
+  // A payload whose data carries an error is a FAILED generation, not a usable fix;
+  // counting it as existing would block regeneration forever.
+  return !!res.data && !res.data.error;
 }
 async function preflight(cx, scanId, findings) {
   const have = new Set();
@@ -414,7 +426,11 @@ function applyWithoutGit(diff, filePath, repoRoot) {
   const original = fs.existsSync(dest) ? readText(dest, [repoRoot]) : "";
   const patched = applyUnifiedDiff(original, diff);
   if (patched === null) return false;
-  mkdirp(path.dirname(dest)); writeText(dest, [repoRoot], patched); return true;
+  // A project file keeps its own permissions; a new one gets the usual source modes.
+  // Owner-only 0600 stays reserved for .ftf outputs, never the developer's sources.
+  const mode = fs.existsSync(dest) ? (fs.statSync(dest).mode & 0o777) : 0o644;
+  mkdirp(path.dirname(dest), 0o755);
+  writeWithMode(dest, [repoRoot], Buffer.from(patched, "utf8"), mode); return true;
 }
 function listZipEntries(buf) {
   let eocd = buf.length - 22; while (eocd >= 0 && buf.readUInt32LE(eocd) !== 0x06054b50) eocd--;
@@ -456,7 +472,10 @@ function overwriteFromPlatform(c, repoRoot) {
   // Explicit opt-in only: copy the platform's fully patched file over the local one.
   if (!c.platform_file || !fs.existsSync(c.platform_file)) return false;
   const dest = containedPath(path.join(repoRoot, c.file_path), repoRoot);
-  mkdirp(path.dirname(dest)); writeBytes(dest, [repoRoot], fs.readFileSync(c.platform_file)); return true;
+  // The project file keeps its own permissions; a new one gets the usual source modes.
+  const mode = fs.existsSync(dest) ? (fs.statSync(dest).mode & 0o777) : 0o644;
+  mkdirp(path.dirname(dest), 0o755);
+  writeWithMode(dest, [repoRoot], fs.readFileSync(c.platform_file), mode); return true;
 }
 function loadManifestForApply(manifestPath, repoRoot) {
   manifestPath = path.normalize(path.resolve(manifestPath));
@@ -556,6 +575,8 @@ async function cmdApply(manifestPath, only, repoRoot, overwrite = false) {
 const TEST_TIMEOUT = 300_000;
 function detectTestRunner(repoRoot) {
   // The project's OWN runner. Returns [argv, label] or [null, reason]. Never installs or writes anything.
+  // Windows: npm/mvn/gradle are .cmd/.bat launchers, so cmdTest spawns through a shell there.
+  const win = process.platform === "win32";
   const pj = path.join(repoRoot, "package.json");
   if (fs.existsSync(pj)) {
     let d = {}; try { d = JSON.parse(readText(pj, [repoRoot])); } catch (e) { d = {}; }
@@ -566,12 +587,18 @@ function detectTestRunner(repoRoot) {
   }
   const has = (f) => fs.existsSync(path.join(repoRoot, f));
   if (["pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini"].some(has) || has("tests") || has("test")) {
-    const probe = spawnSync("python3", ["-m", "pytest", "--version"], { encoding: "utf8" });
-    if (probe.status === 0) return [["python3", "-m", "pytest", "-q"], "python -m pytest"];
+    // On Windows a real Python is `python` or `py`; `python3` is usually the Store stub, which fails the probe.
+    for (const py of win ? ["python", "py", "python3"] : ["python3"]) {
+      const probe = spawnSync(py, ["-m", "pytest", "--version"], { encoding: "utf8" });
+      if (probe.status === 0) return [[py, "-m", "pytest", "-q"], "python -m pytest"];
+    }
     return [null, "pytest is not installed in this Python environment"];
   }
   if (has("pom.xml")) return [["mvn", "-q", "test"], "mvn test"];
-  if (has("build.gradle") || has("build.gradle.kts")) return [has("gradlew") ? ["./gradlew", "test"] : ["gradle", "test"], "gradle test"];
+  if (has("build.gradle") || has("build.gradle.kts")) {
+    const wrapper = win ? "gradlew.bat" : "gradlew";
+    return [has(wrapper) ? [win ? wrapper : "./gradlew", "test"] : ["gradle", "test"], "gradle test"];
+  }
   if (has("go.mod")) return [["go", "test", "./..."], "go test ./..."];
   let subs = []; try { subs = fs.readdirSync(repoRoot).filter((d) => !d.startsWith(".") && fs.statSync(path.join(repoRoot, d)).isDirectory()).sort(); } catch (e) { subs = []; }
   const hints = subs.filter((d) => fs.existsSync(path.join(repoRoot, d, "package.json")) || fs.existsSync(path.join(repoRoot, d, "tests")));
@@ -586,8 +613,14 @@ function cmdTest(manifestPath, repoRoot, onlyFiles) {
   const [argv, label] = detectTestRunner(root);
   const report = { ok: true, repo_root: root, platform_tests: platformTests, platform_tests_present: present };
   if (!argv) { Object.assign(report, { ran: false, reason: label, note: "The project's test runner is not set up, so the tests were not run. Tell the developer exactly this and stop; do not install dependencies, edit package files, or create another runner." }); emit(report); return report; }
-  let cmd = argv; if (onlyFiles && onlyFiles.length && argv[0] === "python3") cmd = argv.concat(onlyFiles.filter((f) => fs.existsSync(path.join(root, f))));
-  const proc = spawnSync(cmd[0], cmd.slice(1), { cwd: root, encoding: "utf8", timeout: TEST_TIMEOUT });
+  let cmd = argv; if (onlyFiles && onlyFiles.length && argv[1] === "-m" && argv[2] === "pytest") cmd = argv.concat(onlyFiles.filter((f) => fs.existsSync(path.join(root, f))));
+  // shell on Windows: npm/mvn/gradle are .cmd/.bat launchers, which Node refuses to spawn directly.
+  let proc;
+  try {
+    proc = spawnSync(cmd[0], cmd.slice(1), { cwd: root, encoding: "utf8", timeout: TEST_TIMEOUT, shell: process.platform === "win32" });
+  } catch (e) {
+    Object.assign(report, { ran: false, runner: label, reason: `could not start the runner: ${e.message}` }); emit(report); return report;
+  }
   if (proc.error && proc.error.code === "ETIMEDOUT") { Object.assign(report, { ran: true, runner: label, passed: false, reason: `timed out after ${TEST_TIMEOUT / 1000}s` }); emit(report); return report; }
   if (proc.error) { Object.assign(report, { ran: false, runner: label, reason: `could not start the runner: ${proc.error.message}` }); emit(report); return report; }
   const out = (proc.stdout || "") + (proc.stderr || "");
