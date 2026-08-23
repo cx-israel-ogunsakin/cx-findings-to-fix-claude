@@ -96,6 +96,9 @@ Nothing is committed or pushed. You review, then commit as usual.
   places the fix into your current code by hand instead of applying it
   blindly, and tells you so. Your edits stay.
 - It works whether your project folder is a git clone or a plain folder.
+- The tool keeps its working files in a `.ftf` folder at the project root. It
+  holds the fetched fix data, so add it to `.gitignore` or delete it when you
+  are done; it does not belong in a commit.
 - Monorepos: if you open one service's folder rather than the whole repo,
   you see only the findings under that folder, and it tells you how many the
   project has in total. Ask for "all findings" to see everything.

@@ -19,7 +19,8 @@ Pick the runtime once with
 Windows ships a `python3` alias that is not Python and exits 49, so never assume
 it works. Run `run` in the foreground with a Bash timeout of 600000 ms (fresh
 fixes take two to three minutes); never background it or poll, and say up front
-that the wait is expected.
+that the wait is expected. If the shell kills `run` at that timeout, rerun the
+same command; fixes that already finished come back free and in seconds.
 
 1. `python3 "$FTF" run` resolves the project from git and picks the scan: the
    only branch with scans (often `.unknown`, normal for zip uploads and
@@ -42,7 +43,9 @@ that the wait is expected.
    before and after first, then propose the same change where the code now
    lives, keep local edits, add no dependency the patch does not add, and say
    the fix was placed by hand. Close by saying the edits are working-tree
-   changes to review with `git diff`; nothing is staged, committed, or pushed.
+   changes to review with `git diff`; nothing is staged, committed, or pushed,
+   and the tool's `.ftf/` folder at the project root can be deleted or
+   gitignored.
 5. Test files are platform files: propose or place them like any other file,
    never author tests or a test harness yourself, never call your own file
    platform-generated. Explain what/why/how per fix; offer once to run the

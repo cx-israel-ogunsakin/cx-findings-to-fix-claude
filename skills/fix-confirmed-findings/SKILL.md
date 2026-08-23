@@ -44,7 +44,9 @@ and stop.
 `run` can take two to three minutes when fixes are generated for the first time.
 Call it in the foreground with a Bash timeout of 600000 ms; do not background it
 or poll. Tell the developer in one line that the wait is expected before you
-start it.
+start it. If the shell kills `run` at that timeout, rerun the same command:
+generation continues on the platform, and fixes that already finished come back
+free and in seconds.
 
 Every subcommand prints one JSON document to stdout. Read only that JSON;
 ignore stderr progress lines.
@@ -72,7 +74,8 @@ call computes them all and takes well under a second.
      Say so and stop; there is nothing to fix until a scan completes.
    - reason `branch_choice_needed`: the developer's local branch has no scan
      but other branches do. Show `branches_with_scans` (the most recently
-     scanned branches, at most 10; `branches_total` says how many exist) as
+     scanned branches, at most 10; `branches_total` is how many branches have
+     recent scans) as
      a numbered list, each with its `latest_scan.created_at` date, say which
      one is `suggested` (the most recent), and say they can also type any
      other branch name. Ask which to use. Rerun with `--branch "<name>"`.
@@ -81,8 +84,8 @@ call computes them all and takes well under a second.
      completed scan. Show the list as above and ask.
    - `"resolved": true`: proceed. State in one line which scan is being used:
      branch, `scan.created_at` date, and engines. If `branch_selected_by` is
-     `only_branch_with_scans`, say that this is the only branch with scans so
-     it was used without asking. If the branch is `.unknown`, relay
+     `only_branch_with_scans`, say that this is the only branch with recent
+     completed scans so it was used without asking. If the branch is `.unknown`, relay
      `branch_note` in plain words: Checkmarx One uses `.unknown` for scans
      uploaded without branch information (zip uploads, some CI and monorepo
      setups); it is normal.
@@ -145,7 +148,10 @@ call computes them all and takes well under a second.
    tests.
 11. **Close.** Say what landed and how to review it: working-tree edits,
    nothing staged, committed, or pushed; point at `git diff` or the
-   source-control view. If any edit applied without a prompt, say so. Then stop.
+   source-control view. Mention that the tool's working files live in `.ftf/`
+   at the project root; that folder can be deleted or added to `.gitignore` and
+   never belongs in a commit. If any edit applied without a prompt, say so.
+   Then stop.
 
 ## Rules
 
