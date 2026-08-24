@@ -198,9 +198,9 @@ name and the second (if any) as the branch, and pass them as `--project` and
    findings were generated but not applied, offer them in one line
    ("Findings 2, 3 and 4 are ready when you want them"). Add one line saying
    where to review: in a git repository, the Source Control view shows each
-   change and can discard any of them; otherwise the edit cards in this
-   conversation open each diff, and rewind (press Esc twice, then Restore
-   code) undoes this session's edits. Say nothing about manifests, `.ftf`,
+   change and can discard any of them; otherwise the conversation shows
+   each applied change as a diff, and `/rewind` (Restore code) undoes this
+   session's edits. Say nothing about manifests, `.ftf`,
    or credit bookkeeping unless the developer asks. Then stop.
 
 Findings default to engine `sast`. Only add `--engine sast sca` if the developer

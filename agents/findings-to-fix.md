@@ -46,7 +46,8 @@ same command; fixes that already finished come back free and in seconds.
    before and after first, then apply the same change where the code now lives, keep local edits, add no dependency the patch does not add, and say
    the fix was placed by hand. Close in one or two short lines naming the
    changed files and where to review: the Source Control view in a git
-   repository, otherwise the conversation's edit cards and rewind. No
+   repository, otherwise the diffs shown in the conversation, with
+   `/rewind` to undo. No
    manifest or `.ftf` narration.
 5. Test files are platform files: apply or place them like any other file,
    never author tests or a test harness yourself, never call your own file

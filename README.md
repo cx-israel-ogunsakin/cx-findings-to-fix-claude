@@ -79,8 +79,8 @@ Claude will:
   after that).
 - show you a table of the confirmed findings and ask which to apply.
 - apply each fix, file by file, and tell you where to review: the Source
-  Control view in a git repository, or the conversation's diff cards and
-  rewind otherwise.
+  Control view in a git repository, or the diffs shown in the conversation,
+  with `/rewind` to undo, otherwise.
 - explain what each fix does and why.
 - offer to run the tests Checkmarx generated for the fix.
 

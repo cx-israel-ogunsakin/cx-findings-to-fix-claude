@@ -103,8 +103,8 @@ manifest and the diffs it proposes, never the whole result set.
    the exact diff no longer fits.
 6. **The assistant applies each fix as an edit.** Each change lands file by
    file; the developer reviews afterwards, in the Source Control view for a
-   git repository or through the conversation's diff cards, and can undo any
-   of them. This is the same whether the project is a git clone or a plain
+   git repository or through the diffs shown in the conversation, and can
+   undo any of them. This is the same whether the project is a git clone or a plain
    folder.
 7. **Files that changed since the scan** are handled differently: the
    assistant reads the intended change and the current file, makes the same change where
