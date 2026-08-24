@@ -31,6 +31,12 @@ Stage ONCE for everything the developer selected: `stage`, or
 `stage --only 0,2,5` for a subset. Do not call `stage` once per finding; one
 call computes them all and takes well under a second.
 
+Trust the tool's JSON and do not re-verify its work: no re-diffing staged
+files against the workspace, no `--help` calls, and never print patches,
+staged files, or test files into the chat with `cat` or `head`. Read
+`patched_path` with the Read tool and propose it; the editor's diff is the
+review surface, never the chat.
+
 
 Pick the runtime ONCE per session with a single probe, before anything else.
 Windows ships a `python3` alias that is not Python: it exits with code 49 and
@@ -98,14 +104,15 @@ name and the second (if any) as the branch, and pass them as `--project` and
      uploaded without branch information (zip uploads, some CI and monorepo
      setups); it is normal.
    - `"ok": false`: show `message` and `hint` verbatim and stop.
-   The manifest also has a `credits` block. Relay it in one line: how many
-   findings already have a fix (free to fetch) and how many do not. If
-   `credits.consent_required` is true the tool STOPPED before generating
-   anything and spent nothing: say that generating the missing fixes runs
-   Checkmarx Remediation Assist and consumes Checkmarx Credits, give the
-   counts, and ask whether to go ahead. On a yes, rerun the same command with
-   `--generate`. On a no, continue with the fixes that already exist (the
-   `NOT_GENERATED` entries are the ones that were not generated). Never pass
+   The manifest also has a `credits` block. If `credits.consent_required` is
+   true, ask in at most two sentences, modeled on: "Generating <N> fixes runs
+   Checkmarx Remediation Assist and consumes Checkmarx Credits. Go ahead and
+   generate all <N>?" When some fixes already exist, lead with "<H> of <T>
+   findings already have fixes, fetched at no cost." No preamble about the
+   tool stopping or nothing having been spent. On a yes, rerun the same
+   command with `--generate`; generation is all or nothing, so never hunt for
+   a per-finding generate flag (`stage --only` is where a subset is chosen).
+   On a no, continue with the fixes that already exist. Never pass
    `--generate` without the developer saying yes in this conversation.
    The manifest also has a `scope` block. If `scope.applied` is true the tool
    limited the findings to the folder the developer has open (monorepos):
@@ -131,7 +138,10 @@ name and the second (if any) as the branch, and pass them as `--project` and
      step 6.
    - `failed`: report the `reason` verbatim. `skipped`: not selected.
    - `tests`: test files the platform generated for these fixes.
-5. **Propose every ready fix as an edit, one file at a time.** For each `ready`
+5. **Propose every ready fix as an edit, one file at a time.** Before the
+   first edit, say in one line that each change will be proposed for review,
+   and that if edits apply without a prompt, auto-accept is on for this
+   session and can be turned off for per-file review. Then, for each `ready`
    entry, read `patched_path` and propose it as the new content of `file`
    using the Edit tool (or Write for a file that does not exist yet), so the
    developer sees the diff and accepts or rejects it. Never write the file
@@ -185,18 +195,17 @@ name and the second (if any) as the branch, and pass them as `--project` and
    create a runner or a standalone test, never retry with a different tool.
    Do not say anything about not running tests when the developer has not
    asked.
-10. **Close.** Say plainly what landed and how to review it: the changed files
-   are working-tree edits, nothing is staged, committed, or pushed. Point at
-   `git diff` (or the editor's source-control view) for a final read. Mention
-   that the tool's working files live in `.ftf/` at the project root; that
-   folder can be deleted or added to `.gitignore` and never belongs in a
-   commit. If any
-   edit was applied without the developer being prompted, say so and mention
-   that auto-accept can be turned off for the session, so nobody discovers a
-   change only at commit time. Then stop.
+10. **Close in at most two short lines.** Name the files that changed and, if
+   findings were generated but not applied, offer them in one line
+   ("Findings 2, 3 and 4 are ready when you want them"). Add one more line
+   only if any edit applied without a prompt: auto-accept is on and can be
+   turned off for per-file review. Say nothing about working trees, git
+   status, staging, commits, manifests, `.ftf`, or credit bookkeeping unless
+   the developer asks. Then stop.
 
 Findings default to engine `sast`. Only add `--engine sast sca` if the developer
 explicitly asks for package (SCA) fixes.
 
-Keep answers short: a table, a numbered list when a choice is needed, and a
-brief what/why/how per fix.
+Keep answers short and visibly formatted: blank lines between sections, a
+table for findings, a bullet list for files, two or three lines of
+what/why/how per fix. Never run sections together into one block of prose.

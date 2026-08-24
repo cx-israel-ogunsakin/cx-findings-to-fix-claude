@@ -12,7 +12,9 @@ The tool is `${CLAUDE_PLUGIN_ROOT}/skills/fix-confirmed-findings/ftf.py` (or the
 identical `ftf.js`). Do not read its source; confirm it exists and run it from
 the workspace root. It prints one JSON document per subcommand and is finished when it returns:
 never add `sleep`, never poll for the manifest, and stage once for all selected
-findings rather than once per finding.
+findings rather than once per finding. Trust its JSON: no re-diffing its
+output, no `--help` calls, and never print patches or file contents into the
+chat; the editor's diff is the review surface.
 
 Pick the runtime once with
 `(python3 -c "import sys" >/dev/null 2>&1 && echo python3) || (node -e "0" >/dev/null 2>&1 && echo node) || echo none`;
@@ -26,10 +28,11 @@ same command; fixes that already finished come back free and in seconds.
    only branch with scans (often `.unknown`, normal for zip uploads and
    monorepos; say so) or the local branch's scan; otherwise it returns
    `branches_with_scans` with dates and a `suggested` default. Show them as a
-   numbered list and ask. Relay the `credits` block: if `consent_required` is
-   true, nothing was generated and nothing was spent; say how many fixes would
-   have to be generated, that this consumes Checkmarx Credits, and ask before
-   rerunning with `--generate`. Never guess. On `project_not_found` show
+   numbered list and ask. If `credits.consent_required` is true, ask in at most
+   two sentences ("Generating <N> fixes runs Checkmarx Remediation Assist and
+   consumes Checkmarx Credits. Go ahead and generate all <N>?") and rerun with
+   `--generate` only on a yes; generation is all or nothing, subsets are
+   chosen at `stage --only`. Never guess. On `project_not_found` show
    `candidates` and ask. Rerun with `--project` / `--branch`. State which scan
    is used (branch, date). If `scope.applied`, relay `scope.note`.
 2. Show `results` as a table and ask which fixes to apply (default: all READY).
@@ -42,10 +45,9 @@ same command; fixes that already finished come back free and in seconds.
    "already in place locally" and do not edit. Otherwise show the intended
    before and after first, then propose the same change where the code now
    lives, keep local edits, add no dependency the patch does not add, and say
-   the fix was placed by hand. Close by saying the edits are working-tree
-   changes to review with `git diff`; nothing is staged, committed, or pushed,
-   and the tool's `.ftf/` folder at the project root can be deleted or
-   gitignored.
+   the fix was placed by hand. Close in one or two short lines naming the
+   changed files; mention auto-accept only if an edit applied without a
+   prompt. No working-tree, git, manifest, or `.ftf` narration.
 5. Test files are platform files: propose or place them like any other file,
    never author tests or a test harness yourself, never call your own file
    platform-generated. Explain what/why/how per fix; offer once to run the
