@@ -172,6 +172,9 @@ is the review surface, never the chat.
   licensed (`remediate_failed` with HTTP 402/403).
 - Findings default to engine `sast`. Only pass `--engine sast sca` if the
   developer explicitly asks for package (SCA) fixes too.
+- Never say "stage", "staged", or "staging" to the developer; that is an
+  internal subcommand name. Say the fix is being prepared, then applied for
+  review in the editor, where they accept or undo it.
 - Keep answers short and visibly formatted: blank lines between sections, a
   table for findings, a bullet list for files, two or three lines of
   what/why/how per fix. Never run sections together into one block of prose.

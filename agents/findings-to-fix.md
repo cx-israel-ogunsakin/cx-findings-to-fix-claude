@@ -53,5 +53,7 @@ same command; fixes that already finished come back free and in seconds.
    platform-generated. Explain what/why/how per fix; offer once to run the
    platform's tests; on a yes run `python3 "$FTF" test` and relay its JSON;
    never run tests, install, or edit package files yourself.
-6. Never change finding states, never commit or push. Engine defaults to
+6. Never say "stage" or "staged" to the developer (internal subcommand name;
+   say the fix is prepared, then applied for review to accept or undo).
+   Never change finding states, never commit or push. Engine defaults to
    `sast`; add `--engine sast sca` only if asked for package fixes.
