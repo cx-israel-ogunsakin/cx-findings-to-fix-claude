@@ -579,7 +579,7 @@ def build_html(font_css, M):
      has already evaluated the findings on the platform, using reachability, exploitability,
      code context, and policy signals, and confirmed the ones that require action.
      Findings-to-Fix takes only those, asks Remediation Assist to generate the review-ready
-     fix, and shows you each change in Claude Code as a diff to accept or reject. The agent
+     fix, and applies each change in Claude Code as an edit you review and can undo. The agent
      proposes; you approve.</p>
   <div class="cover-cols">
     <div class="panel">
@@ -631,7 +631,7 @@ def build_html(font_css, M):
 <div class="dgblock">
   <h2 class="dg-h"><span class="dg-n">3</span>How a fix travels</h2>
   %s
-  <p class="dg-cap">Every change to code arrives as an edit that you accept or reject.
+  <p class="dg-cap">Every change to code arrives as an edit that you review and can undo.
      The plugin never commits or pushes.</p>
 </div>
 """ % (d1, d2, d3)
@@ -689,7 +689,7 @@ claude plugin install cx-findings-to-fix@cx-findings-to-fix-claude</pre>
       scanned ones with dates and asks. It never guesses.</li>
   <li>fetch the fixes from Checkmarx: a couple of minutes the first time, seconds after that.</li>
   <li>show you a table of the confirmed findings and ask which to apply.</li>
-  <li>propose each change as an edit you accept or reject, file by file.</li>
+  <li>apply each change as an edit you review and can undo, file by file.</li>
   <li>explain what each fix does and why, then offer to run the tests Checkmarx generated.</li>
 </ul>
 <p class="note-line">Nothing is committed or pushed. You review, then commit as usual.</p>
@@ -736,8 +736,8 @@ claude plugin install cx-findings-to-fix@cx-findings-to-fix-claude</pre>
   <li><b>Claude shows the findings</b> as a table and asks which to apply.</li>
   <li><b>The tool computes each fix against the current files</b> without writing anything,
       producing the complete new content for each changed file.</li>
-  <li><b>Claude proposes each fix as an edit.</b> The change is shown as a diff the
-      developer accepts or rejects, file by file.</li>
+  <li><b>Claude proposes each fix as an edit.</b> The change is shown as a edit the
+      developer reviews and can undo, file by file.</li>
   <li><b>Files that changed since the scan are placed by hand,</b> so the developer's own
       edits stay in place.</li>
   <li><b>Claude explains each fix</b> (what, why, how) and names the tests Remediation

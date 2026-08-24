@@ -5,7 +5,7 @@ Claude Code. Triage Assist has already evaluated the findings on the platform
 using Attackability-based context (reachability, exploitability, code context,
 policy signals) and confirmed the ones that require action. The plugin takes only
 those confirmed findings, asks Remediation Assist to generate the review-ready
-fix, and shows you each change as a diff to accept or reject. The agent proposes;
+fix, and applies each change as an edit you review and can undo. The agent proposes;
 you approve.
 
 You run one command. It pulls only the findings Triage Assist has confirmed,
@@ -78,7 +78,9 @@ Claude will:
 - fetch the fixes from Checkmarx (a couple of minutes the first time, seconds
   after that).
 - show you a table of the confirmed findings and ask which to apply.
-- propose each change as an edit you accept or reject, file by file.
+- apply each fix, file by file, and tell you where to review: the Source
+  Control view in a git repository, or the conversation's diff cards and
+  rewind otherwise.
 - explain what each fix does and why.
 - offer to run the tests Checkmarx generated for the fix.
 

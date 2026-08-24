@@ -5,8 +5,8 @@ Triage Assist has already evaluated the findings on the platform using
 Attackability-based context (reachability, exploitability, code context, policy
 signals) and confirmed the ones that require action. The plugin takes only those
 confirmed findings, asks Remediation Assist to generate the review-ready fix, and
-brings it to the developer in Claude Code as a change they review and
-accept or reject. Remediation Assist can open review-ready fix pull requests
+brings it to the developer in Claude Code as a change they review and can
+undo. Remediation Assist can open review-ready fix pull requests
 for supported GitHub Code Repository Integration projects; for every other
 project type, this plugin is how that fix reaches the editor. The agent
 proposes; the developer approves. (A GitHub Copilot version of the same plugin
@@ -101,9 +101,11 @@ manifest and the diffs it proposes, never the whole result set.
    without writing anything. For each changed file it produces the complete
    new content, or reports that the local file has changed since the scan so
    the exact diff no longer fits.
-6. **The assistant proposes each fix as an edit.** Each change is shown as a
-   diff the developer accepts or rejects, file by file. This is the same whether the project is a
-   git clone or a plain folder.
+6. **The assistant applies each fix as an edit.** Each change lands file by
+   file; the developer reviews afterwards, in the Source Control view for a
+   git repository or through the conversation's diff cards, and can undo any
+   of them. This is the same whether the project is a git clone or a plain
+   folder.
 7. **Files that changed since the scan** are handled differently: the
    assistant reads the intended change and the current file, makes the same change where
    the code now lives, keeps the developer's other edits, and says plainly that
@@ -131,8 +133,9 @@ manifest and the diffs it proposes, never the whole result set.
   Credits on it. Fixes that already exist are fetched at no cost.
 - The tool keeps its working files in a `.ftf` folder at the project root; it
   can be deleted at any time and belongs in `.gitignore`.
-- Every change to code arrives as an editor edit the developer accepts. The
-  tool writes nothing into the project on its own during the normal flow.
+- Every change to code arrives as an editor edit the developer can review and
+  undo. The tool writes nothing into the project on its own during the normal
+  flow.
 - The plugin never commits or pushes.
 - Only Confirmed critical and high findings are considered. Package (SCA)
   fixes are supported and off by default.
