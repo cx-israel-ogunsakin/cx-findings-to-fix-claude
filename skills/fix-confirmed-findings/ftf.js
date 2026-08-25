@@ -210,7 +210,9 @@ async function cmdResolve(cx, project, branch, quiet = false) {
 async function listConfirmed(cx, scanId, severities, engines) {
   const findings = []; let offset = 0; const page = 100;
   for (;;) {
-    const qs = new URLSearchParams([["scan-id", scanId], ["limit", String(page)], ["offset", String(offset)], ["state", "CONFIRMED"], ...severities.map((s) => ["severity", s])]);
+    // One comma-joined severity parameter: the results API honors only the FIRST
+    // value when the key is repeated, which silently dropped every non-CRITICAL finding.
+    const qs = new URLSearchParams([["scan-id", scanId], ["limit", String(page)], ["offset", String(offset)], ["state", "CONFIRMED"], ["severity", severities.join(",")]]);
     const [st, body] = await cx.get(`/api/results/?${qs}`);
     if (st !== 200) die("results_failed", `/api/results returned HTTP ${st}: ${body.message}`);
     const batch = body.results || [];

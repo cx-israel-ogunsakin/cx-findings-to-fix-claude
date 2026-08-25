@@ -374,8 +374,10 @@ def cmd_resolve(cx, project=None, branch=None, quiet=False):
 def list_confirmed(cx, scan_id, severities, engines):
     findings, offset, page = [], 0, 100
     while True:
-        qs = [("scan-id", scan_id), ("limit", str(page)), ("offset", str(offset)), ("state", "CONFIRMED")]
-        qs += [("severity", s) for s in severities]
+        # One comma-joined severity parameter: the results API honors only the FIRST
+        # value when the key is repeated, which silently dropped every non-CRITICAL finding.
+        qs = [("scan-id", scan_id), ("limit", str(page)), ("offset", str(offset)), ("state", "CONFIRMED"),
+              ("severity", ",".join(severities))]
         st, body = cx.get("/api/results/?" + urllib.parse.urlencode(qs))
         if st != 200:
             die("results_failed", f"/api/results returned HTTP {st}: {body.get('message')}")
