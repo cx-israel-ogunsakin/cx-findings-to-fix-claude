@@ -115,6 +115,14 @@ def makedirs_private(path):
         pass
 
 
+def ensure_self_ignored(out_dir):
+    """Drop a .gitignore containing `*` into the tool's own output folder, so .ftf
+    never shows up in the project's git status even before anyone edits .gitignore."""
+    marker = os.path.join(out_dir, ".gitignore")
+    if not os.path.isfile(marker):
+        write_private_text(marker, (out_dir,), "*\n")
+
+
 def http_read(url, data=None, headers=None, timeout=HTTP_TIMEOUT):
     """GET/POST a URL and return (status, bytes). Raises RuntimeError on non-2xx."""
     req = urllib.request.Request(url, data=data, headers=headers or {"User-Agent": USER_AGENT})
@@ -654,6 +662,7 @@ def _write_manifest(manifest, out_dir, quiet):
     if out_dir:
         out_dir = contained_path(out_dir, CWD, HOME)
         makedirs_private(out_dir)
+        ensure_self_ignored(out_dir)
         for i, r in enumerate(manifest.get("results", [])):
             if r.get("status") != "READY":
                 continue
@@ -814,6 +823,7 @@ def cmd_stage(manifest_path, only=None, repo_root=None):
                 report["needs_assist"].append(entry)
                 continue
             makedirs_private(staged_dir)
+            ensure_self_ignored(out_dir)
             staged = os.path.join(staged_dir, f"{i:02d}-{j}-{os.path.basename(file_path)}")
             write_private_text(staged, (out_dir,), patched)
             entry.update({"status": "READY", "exists": os.path.isfile(dest), "patched_path": staged,

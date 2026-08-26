@@ -1,6 +1,6 @@
 {
   "name": "cx-findings-to-fix",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "description": "Findings-to-Fix builds on Checkmarx One Triage Assist and Remediation Assist. Triage Assist has already evaluated the findings on the platform using Attackability-based context (reachability, exploitability, code context, policy) and confirmed the ones that require action. The plugin takes only those confirmed findings, asks Remediation Assist to generate the review-ready fix, and brings it into the developer's editor. The agent proposes; the developer approves. Run /cx-findings-to-fix:fix in the project you want to fix: it pulls only the findings Triage Assist has confirmed on your branch, requests fixes from Remediation Assist, and applies each as an edit you review and can undo.",
   "keywords": [
     "checkmarx",

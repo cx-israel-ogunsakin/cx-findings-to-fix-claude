@@ -54,6 +54,12 @@ function writeWithMode(p, roots, data, mode = FILE_MODE) {
 const writeText = (p, roots, t) => writeWithMode(p, roots, Buffer.from(t, "utf8"));
 const writeBytes = (p, roots, b) => writeWithMode(p, roots, b);
 const mkdirp = (p, mode = DIR_MODE) => fs.mkdirSync(p, { recursive: true, mode });
+function ensureSelfIgnored(outDir) {
+  // Drop a .gitignore containing `*` into the tool's own output folder, so .ftf
+  // never shows up in the project's git status even before anyone edits .gitignore.
+  const marker = path.join(outDir, ".gitignore");
+  if (!fs.existsSync(marker)) writeText(marker, [outDir], "*\n");
+}
 
 async function httpRead(url, { method = "GET", body, headers = {}, timeout = HTTP_TIMEOUT } = {}) {
   const ctl = new AbortController();
@@ -378,7 +384,7 @@ async function savePlatformFiles(r, index, outDir) {
 }
 async function writeManifest(manifest, outDir, quiet) {
   if (outDir) {
-    outDir = containedPath(outDir, CWD, HOME); mkdirp(outDir);
+    outDir = containedPath(outDir, CWD, HOME); mkdirp(outDir); ensureSelfIgnored(outDir);
     for (const [i, r] of manifest.results.entries()) {
       if (r.status !== "READY") continue;
       (r.file_changes || []).forEach((c, j) => { if (!c.diff) return;
@@ -518,6 +524,7 @@ function cmdStage(manifestPath, only, repoRoot) {
         report.needs_assist.push(entry); return;
       }
       mkdirp(stagedDir);
+      ensureSelfIgnored(outDir);
       const staged = path.join(stagedDir, `${String(i).padStart(2, "0")}-${j}-${path.basename(filePath)}`);
       writeText(staged, [outDir], patched);
       const dl = diff.split("\n");
