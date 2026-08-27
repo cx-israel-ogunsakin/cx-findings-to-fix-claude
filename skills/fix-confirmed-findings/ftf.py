@@ -6,6 +6,8 @@ fetch platform-generated fixes from the Remediation Assist Agent API.
 Zero dependencies (Python 3.8+ stdlib only). Same behavior as ftf.js.
 
 Subcommands
+  auth      [--apikey KEY]                    -> one-time setup: verify an API key and store it
+                                                 in the shared Checkmarx credential file
   resolve   [--project NAME] [--branch NAME]  -> project/scan resolution as JSON
   remediate --scan-id ID [--severity ...] [--engine ...] [--out DIR] -> fixes manifest as JSON
   stage     [--manifest FILE] [--only IDX,...] -> compute patched files without touching the workspace
@@ -138,51 +140,108 @@ def http_read(url, data=None, headers=None, timeout=HTTP_TIMEOUT):
 
 
 # ---------------------------------------------------------------- auth
-_KEY_LINE = re.compile(r"\s*(cx_apikey|apikey|cx-apikey)\s*:\s*['\"]?([A-Za-z0-9\-_\.]{40,})['\"]?\s*$", re.I)
+CX_CONFIG = os.path.join(HOME, ".checkmarx", "checkmarxcli.yaml")
 
 
-def _find_apikey_in_cx_config():
-    cfg = os.path.join(HOME, ".checkmarx", "checkmarxcli.yaml")
-    if not os.path.isfile(cfg):
-        return None
-    for line in read_text(cfg, (HOME,)).splitlines():
-        match = _KEY_LINE.match(line)
-        if match:
-            return match.group(2)
+def _read_cx_config():
+    """Parse the shared Checkmarx credential file (the YAML the cx CLI and other
+    Checkmarx tools use) without a YAML dependency. Forgiving on purpose: any
+    `key: value` line counts, quotes are stripped, and no assumption is made
+    about which characters a credential may contain."""
+    out = {}
+    if not os.path.isfile(CX_CONFIG):
+        return out
+    for line in read_text(CX_CONFIG, (HOME,)).splitlines():
+        m = re.match(r"\s*([A-Za-z0-9_\-]+)\s*:\s*(.*?)\s*$", line)
+        if m:
+            out[m.group(1).lower().replace("-", "_")] = m.group(2).strip().strip("'\"")
+    return out
+
+
+def _config_apikey(cfg):
+    for k in ("cx_apikey", "apikey"):
+        v = (cfg.get(k) or "").strip()
+        if len(v) >= 20:
+            return v
     return None
+
+
+def _self_auth_command():
+    me = os.path.abspath(__file__)
+    runner = "node" if me.endswith(".js") else "python3"
+    return f'{runner} "{me}" auth'
+
+
+def _token_endpoint(apikey, cfg):
+    """The IAM token endpoint: from the key's own iss claim when it is a JWT,
+    otherwise built from the YAML's base auth URI and tenant."""
+    try:
+        return b64json(apikey.split(".")[1])["iss"], None
+    except (IndexError, ValueError, KeyError):
+        base_auth = (cfg.get("cx_base_auth_uri") or "").rstrip("/")
+        tenant = cfg.get("cx_tenant") or ""
+        if base_auth and tenant:
+            return f"{base_auth}/auth/realms/{tenant}", None
+        return None, ("the credential is not a Checkmarx One API key JWT, and the credential "
+                      "file has no cx_base_auth_uri/cx_tenant to locate the sign-in server")
+
+
+def _exchange(apikey, cfg):
+    """Trade the stored credential for an access token. Returns (token, error)."""
+    iss, why = _token_endpoint(apikey, cfg)
+    if not iss:
+        return None, why
+    form = urllib.parse.urlencode({
+        "grant_type": "refresh_token", "client_id": "ast-app", "refresh_token": apikey}).encode()
+    try:
+        _, raw = http_read(iss + "/protocol/openid-connect/token", data=form,
+                           headers={"User-Agent": USER_AGENT,
+                                    "Content-Type": "application/x-www-form-urlencoded"}, timeout=30)
+        return json.loads(raw)["access_token"], None
+    except (RuntimeError, ValueError, KeyError) as exc:
+        return None, str(exc)[:200]
+    except urllib.error.URLError as exc:
+        if "CERTIFICATE_VERIFY_FAILED" in str(exc):
+            die("tls_certificates", "This Python cannot verify HTTPS certificates (no CA bundle). Use the system or pyenv Python, "
+                "or run the Node version: node ftf.js ...", detail=str(exc)[:200])
+        die("network", f"Could not reach Checkmarx One: {exc}")
 
 
 class CxClient:
     def __init__(self):
-        apikey = os.environ.get("CX_APIKEY") or _find_apikey_in_cx_config()
-        if not apikey:
+        cfg = _read_cx_config()
+        # Credential candidates in order. A blank CX_APIKEY is ignored, and if a set
+        # one fails the exchange, the credential file is still tried: a leftover or
+        # botched environment variable can never block a working stored credential.
+        candidates = []
+        env_key = (os.environ.get("CX_APIKEY") or "").strip()
+        if env_key:
+            candidates.append(("CX_APIKEY", env_key))
+        file_key = _config_apikey(cfg)
+        if file_key and all(file_key != k for _, k in candidates):
+            candidates.append(("the stored credential", file_key))
+        if not candidates:
             die("no_credential",
-                "No Checkmarx One API key found. Set CX_APIKEY or run: cx configure set --prop-name cx_apikey --prop-value <key>")
+                f"No Checkmarx One credential found. Run this once in a terminal, then retry: {_self_auth_command()}")
+        tok, failures = None, []
+        for source, key in candidates:
+            tok, err = _exchange(key, cfg)
+            if tok:
+                self.auth_source = source
+                break
+            failures.append(f"{source}: {err}")
+            log.error("token exchange failed for %s: %s", source, err)
+        if not tok:
+            die("auth_failed",
+                f"Authentication failed ({'; '.join(failures)}). Store a fresh API key by running: {_self_auth_command()}")
         try:
-            iss = b64json(apikey.split(".")[1])["iss"]
-        except (IndexError, ValueError, KeyError) as exc:
-            log.error("credential is not a Checkmarx One API key JWT: %s", exc)
-            die("bad_credential", "CX_APIKEY does not look like a Checkmarx One API key (expected a JWT).")
-        form = urllib.parse.urlencode({
-            "grant_type": "refresh_token", "client_id": "ast-app", "refresh_token": apikey}).encode()
-        try:
-            _, raw = http_read(iss + "/protocol/openid-connect/token", data=form,
-                               headers={"User-Agent": USER_AGENT,
-                                        "Content-Type": "application/x-www-form-urlencoded"}, timeout=30)
-            tok = json.loads(raw)["access_token"]
-        except (RuntimeError, ValueError, KeyError) as exc:
-            log.error("token exchange failed: %s", exc)
-            die("auth_failed", "Token exchange failed. The API key may be revoked or expired.")
-        except urllib.error.URLError as exc:
-            if "CERTIFICATE_VERIFY_FAILED" in str(exc):
-                die("tls_certificates", "This Python cannot verify HTTPS certificates (no CA bundle). Use the system or pyenv Python, "
-                    "or run the Node version: node ftf.js ...", detail=str(exc)[:200])
-            die("network", f"Could not reach Checkmarx One: {exc}")
-        claims = b64json(tok.split(".")[1])
-        self.base = os.environ.get("CX_BASE_URL") or claims.get("ast-base-url")
+            claims = b64json(tok.split(".")[1])
+        except (IndexError, ValueError):
+            claims = {}
+        self.base = os.environ.get("CX_BASE_URL") or claims.get("ast-base-url") or (cfg.get("cx_base_uri") or "").rstrip("/")
         if not self.base:
             die("no_base_url", "Could not determine the Checkmarx One base URL; set CX_BASE_URL.")
-        self.tenant = claims.get("tenant_name") or claims.get("azp") or "?"
+        self.tenant = claims.get("tenant_name") or claims.get("azp") or cfg.get("cx_tenant") or "?"
         self.headers = {
             "Authorization": f"Bearer {tok}",
             "Accept": "application/json; version=1.0",
@@ -213,6 +272,50 @@ class CxClient:
 
     def get(self, path):
         return self.call("GET", path)
+
+
+def cmd_auth(apikey=None):
+    """One-time developer setup: take an API key, verify it against the tenant, and
+    store it in the shared Checkmarx credential file so every run finds it. The key
+    is typed or piped locally; it is never passed through an assistant conversation."""
+    if not apikey:
+        if sys.stdin.isatty():
+            import getpass
+            apikey = getpass.getpass("Checkmarx One API key (input is hidden): ").strip()
+        else:
+            apikey = sys.stdin.readline().strip()
+    if not apikey:
+        die("no_credential", "No API key entered. Create one in Checkmarx One under "
+            "Settings > Identity and Access Management > API Keys, then run this again.")
+    cfg = _read_cx_config()
+    tok, err = _exchange(apikey, cfg)
+    if not tok:
+        die("auth_failed", f"That key did not authenticate: {err}",
+            hint="Check that the key was copied whole and has not expired, then run this again.")
+    try:
+        claims = b64json(tok.split(".")[1])
+    except (IndexError, ValueError):
+        claims = {}
+    tenant = claims.get("tenant_name") or claims.get("azp") or cfg.get("cx_tenant") or "?"
+    base = claims.get("ast-base-url") or (cfg.get("cx_base_uri") or "").rstrip("/") or "?"
+    # Store: update the credential line in place, or create the file fresh (0600, dir 0700).
+    line = f"cx_apikey: {apikey}"
+    if os.path.isfile(CX_CONFIG):
+        lines, replaced = [], False
+        for raw in read_text(CX_CONFIG, (HOME,)).splitlines():
+            if not replaced and re.match(r"\s*(cx_apikey|apikey)\s*:", raw, re.I):
+                lines.append(line)
+                replaced = True
+            else:
+                lines.append(raw)
+        if not replaced:
+            lines.append(line)
+        write_private_text(CX_CONFIG, (HOME,), "\n".join(lines) + "\n")
+    else:
+        makedirs_private(os.path.dirname(CX_CONFIG))
+        write_private_text(CX_CONFIG, (HOME,), line + "\n")
+    emit({"ok": True, "tenant": tenant, "base_url": base, "stored_in": CX_CONFIG,
+          "message": f"Authentication verified against tenant '{tenant}' and saved. You're set; no environment variables needed."})
 
 
 # ---------------------------------------------------------------- git helpers
@@ -1011,6 +1114,8 @@ def main():
         p.add_argument("--scope", default="auto",
                        help="Monorepos: 'auto' keeps findings under the folder you have open (default), 'all' keeps every finding, or give a repo-relative subpath")
 
+    p_auth = sub.add_parser("auth")
+    p_auth.add_argument("--apikey", help="Non-interactive use only (CI); interactively the key is prompted for, hidden.")
     add_resolve_args(sub.add_parser("resolve"))
     add_remediate_args(sub.add_parser("remediate"))
     p_run = sub.add_parser("run")
@@ -1032,6 +1137,9 @@ def main():
                          help="For drifted files, copy the platform's full patched file over the local one instead of handing off (discards local edits to that file)")
 
     a = ap.parse_args()
+    if a.cmd == "auth":
+        cmd_auth(a.apikey)
+        return
     if a.cmd == "test":
         cmd_test(a.manifest, a.repo_root, a.only)
         return

@@ -585,8 +585,8 @@ def build_html(font_css, M):
     <div class="panel">
       <h2 class="pnl-h">What you need</h2>
       <ul class="ticks">
-        <li><b>A Checkmarx One API key</b> on your machine, in your shell profile
-            or in the <code>cx</code> CLI configuration.</li>
+        <li><b>A Checkmarx One API key</b>, stored once with the plugin's
+            one-line <code>auth</code> command.</li>
         <li><b>Python 3 or Node</b> on your machine. Either one works.</li>
         <li><b>Claude Code</b> in a terminal, or through its VS&nbsp;Code or
             JetBrains extension.</li>
@@ -642,12 +642,16 @@ def build_html(font_css, M):
     p3 += """
 <ol class="steps">
   <li>
-    <h2>A Checkmarx One API key on your machine</h2>
-    <p>Ask your Checkmarx admin for an API key. Then either put it in your shell profile:</p>
-    <pre class="code">export CX_APIKEY=&lt;your key&gt;</pre>
-    <p>or, if you already use the Checkmarx <code>cx</code> command line tool:</p>
-    <pre class="code">cx configure set --prop-name cx_apikey --prop-value &lt;your key&gt;</pre>
-    <p>Findings-to-Fix reads it from either place. It never shows the key to Claude.</p>
+    <h2>Authenticate once</h2>
+    <p>Ask your Checkmarx admin for an API key (Checkmarx One &gt; <b>Settings &gt;
+       Identity and Access Management &gt; API Keys</b>). When you are not authenticated
+       yet, the Findings-to-Fix note at the start of a session shows a one-line command;
+       run it in a terminal:</p>
+    <pre class="code">python3 "&lt;the plugin's ftf.py&gt;" auth</pre>
+    <p>Paste the key when prompted (the input is hidden). It is verified against your
+       tenant on the spot and stored securely on your machine; every later run finds it
+       automatically. Nothing is typed into the chat, and no environment variables are
+       needed.</p>
   </li>
   <li>
     <h2>Python or Node on your machine</h2>
@@ -673,10 +677,14 @@ claude plugin install cx-findings-to-fix@cx-findings-to-fix-claude</pre>
     p4 += """
 <ol class="steps tight">
   <li><h2>Open the project you want to fix and start Claude Code</h2>
-      <p>Run <code>claude</code> in a terminal in the project folder. The Claude Code
-         extensions for VS&nbsp;Code and JetBrains work the same way.</p></li>
+      <p>In a terminal: run <code>claude</code> in the project folder. In VS&nbsp;Code,
+         JetBrains, or another editor with the Claude Code extension: open the project,
+         then open the Claude panel (the Spark icon in VS&nbsp;Code) and use its chat box
+         the same way.</p></li>
   <li><h2>Type <code class="inl">/cx-f</code>, press Tab to complete, then Enter</h2>
-      <p>Add the project name and branch after the command to skip the questions:
+      <p>The command works the same in the terminal and in the editor panel, and plain
+         words work too: "fix my confirmed findings". Add the project name and branch
+         after the command to skip the questions:
          <code>/cx-findings-to-fix:fix CxRW-Sandbox/ProjectHub9 feat/update-routes</code></p></li>
 </ol>
 <h2 class="sub-h">Claude will</h2>
@@ -777,7 +785,7 @@ claude plugin install cx-findings-to-fix@cx-findings-to-fix-claude</pre>
   <thead><tr><th>Credential</th><th>Lives</th><th>Used by</th><th>Never reaches</th></tr></thead>
   <tbody>
     <tr><td><b>Checkmarx One API key</b></td>
-        <td>shell profile or <code>cx</code> CLI config on the workstation</td>
+        <td>the shared Checkmarx credential file, written once by the plugin's <code>auth</code> command</td>
         <td>the <code>ftf</code> tool, which exchanges it for a short-lived token in memory</td>
         <td>the assistant's conversation, Anthropic</td></tr>
     <tr><td><b>Claude Code session</b></td>
@@ -844,7 +852,7 @@ claude plugin install cx-findings-to-fix@cx-findings-to-fix-claude</pre>
     <h2 class="pnl-h">Pre-approve it centrally</h2>
     <p>Claude Code's managed settings can pre-approve the marketplace for everyone, so each
        developer does not have to approve the source themselves.</p>
-    <p>Per developer, one time: a Checkmarx One API key, Python 3 or Node on the machine,
+    <p>Per developer, one time: the plugin's <code>auth</code> command, Python 3 or Node,
        and Claude Code's Bash tool allowed. The first run asks the developer to permit the
        plugin's command.</p>
   </div>

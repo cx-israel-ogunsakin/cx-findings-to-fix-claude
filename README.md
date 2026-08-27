@@ -31,24 +31,14 @@ the Copilot version of this same plugin.
 
 You need three things once. After that it is just running the command.
 
-### 1. A Checkmarx One API key on your machine
-
-Ask your Checkmarx admin for an API key. Then either
-
-- put it in your shell profile: `export CX_APIKEY=<your key>`, or
-- if you already use the Checkmarx `cx` command line tool:
-  `cx configure set --prop-name cx_apikey --prop-value <your key>`
-
-Findings-to-Fix reads it from either place. It never shows the key to Claude.
-
-### 2. Python or Node on your machine
+### 1. Python or Node on your machine
 
 Either one works, and the plugin picks whichever it finds. Most Macs and Linux
 machines already have Python 3. On Windows, note that a fresh machine has a
 `python3` that is only a Microsoft Store shortcut, not Python; the plugin
 detects that and uses Node instead, so having Node installed is enough.
 
-### 3. Install the plugin
+### 2. Install the plugin
 
 ```
 claude plugin marketplace add cx-israel-ogunsakin/cx-findings-to-fix-claude
@@ -56,8 +46,25 @@ claude plugin install cx-findings-to-fix@cx-findings-to-fix-claude
 ```
 
 (For a private copy of this repository, use its Git URL or a local folder path
-in the first command.) You will see a short "Findings-to-Fix is installed" note
-when a session starts.
+in the first command.) You will see a short "Findings-to-Fix" note when a
+session starts.
+
+### 3. Authenticate once
+
+Ask your Checkmarx admin for an API key (Checkmarx One > **Settings >
+Identity and Access Management > API Keys**). Then run the plugin's one-line
+auth command in a terminal. When you are not authenticated yet, the
+"Findings-to-Fix" note at the start of a session shows you the exact
+command, in the form:
+
+```
+python3 "<the plugin's ftf.py>" auth
+```
+
+Paste the key when prompted (the input is hidden). The key is verified against
+your tenant on the spot and stored securely on your machine; every later run
+finds it automatically. Nothing is typed into the chat, and no environment
+variables are needed. For CI or headless use, setting `CX_APIKEY` also works.
 
 ## Using it
 

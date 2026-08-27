@@ -37,9 +37,10 @@ and the boundaries.
   provides the `/cx-findings-to-fix:fix` command, a subagent, a skill with the
   same instructions, and one small tool (`ftf`, shipped in both Python and
   Node so either runtime works) that talks to the Checkmarx API.
-- The developer's Checkmarx One API key, stored in their shell profile or in
-  the Checkmarx `cx` CLI configuration. The tool exchanges it for a short-lived
-  token in memory. The key never appears in the assistant's conversation.
+- The developer's Checkmarx One API key, stored once with the tool's `auth`
+  command in the shared Checkmarx credential file on the workstation. The tool
+  exchanges it for a short-lived token in memory. The key never appears in the
+  assistant's conversation.
 
 ## The plugin's anatomy
 
@@ -121,7 +122,7 @@ manifest and the diffs it proposes, never the whole result set.
 
 | Credential | Lives | Used by | Never reaches |
 |---|---|---|---|
-| Checkmarx One API key | shell profile or `cx` CLI config on the workstation | the `ftf` tool, which exchanges it for a short-lived token in memory | the assistant's conversation, Anthropic |
+| Checkmarx One API key | the shared Checkmarx credential file on the workstation, written by the tool's one-time `auth` command | the `ftf` tool, which exchanges it for a short-lived token in memory | the assistant's conversation, Anthropic |
 | Claude Code session | Claude Code's sign-in | Claude Code | Checkmarx |
 | CI/CD credential that triggers scans | the CI/CD system | the pipeline | the developer's machine |
 
@@ -148,6 +149,6 @@ adds the repository as a marketplace and installs from it
 (`claude plugin marketplace add`, `claude plugin install`). Claude Code's
 managed settings can pre-approve the marketplace for everyone.
 
-Per developer, one time: an API key, and Python 3 or Node on the machine.
+Per developer, one time: the plugin's `auth` command with their API key, and Python 3 or Node on the machine.
 Claude Code's Bash tool must be allowed; the first run asks the developer to
 permit the plugin's command.

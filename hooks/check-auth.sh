@@ -8,5 +8,6 @@ fi
 if [ -f "$HOME/.checkmarx/checkmarxcli.yaml" ] && grep -qiE '^\s*(cx_apikey|apikey)\s*:' "$HOME/.checkmarx/checkmarxcli.yaml"; then
   echo "$TIP"; exit 0
 fi
-echo "Findings-to-Fix: no Checkmarx One API key found. Set CX_APIKEY or run: cx configure set --prop-name cx_apikey --prop-value <key>"
+FTF="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}/skills/fix-confirmed-findings/ftf.py"
+echo "Findings-to-Fix: not authenticated yet. Run this once in a terminal (your API key is prompted for and stored securely): python3 \"$FTF\" auth"
 exit 0

@@ -73,36 +73,87 @@ async function httpRead(url, { method = "GET", body, headers = {}, timeout = HTT
 }
 
 // ---------------------------------------------------------------- auth
-const KEY_LINE = /^\s*(cx_apikey|apikey|cx-apikey)\s*:\s*['"]?([A-Za-z0-9\-_.]{40,})['"]?\s*$/i;
-function findApiKeyInCxConfig() {
-  const cfg = path.join(HOME, ".checkmarx", "checkmarxcli.yaml");
-  if (!fs.existsSync(cfg)) return null;
-  for (const line of readText(cfg, [HOME]).split(/\r?\n/)) { const m = KEY_LINE.exec(line); if (m) return m[2]; }
+const CX_CONFIG = path.join(HOME, ".checkmarx", "checkmarxcli.yaml");
+
+function readCxConfig() {
+  // Parse the shared Checkmarx credential file without a YAML dependency. Forgiving on
+  // purpose: any `key: value` line counts, quotes are stripped, no charset assumptions.
+  const out = {};
+  if (!fs.existsSync(CX_CONFIG)) return out;
+  for (const line of readText(CX_CONFIG, [HOME]).split(/\r?\n/)) {
+    const m = /^\s*([A-Za-z0-9_\-]+)\s*:\s*(.*?)\s*$/.exec(line);
+    if (m) out[m[1].toLowerCase().replace(/-/g, "_")] = m[2].trim().replace(/^['"]|['"]$/g, "");
+  }
+  return out;
+}
+
+function configApikey(cfg) {
+  for (const k of ["cx_apikey", "apikey"]) {
+    const v = (cfg[k] || "").trim();
+    if (v.length >= 20) return v;
+  }
   return null;
+}
+
+function selfAuthCommand() {
+  return `node "${path.resolve(__filename)}" auth`;
+}
+
+function tokenEndpoint(apikey, cfg) {
+  // The IAM token endpoint: from the key's own iss claim when it is a JWT, otherwise
+  // built from the credential file's base auth URI and tenant.
+  try {
+    return [b64json(apikey.split(".")[1]).iss, null];
+  } catch (e) {
+    const baseAuth = (cfg.cx_base_auth_uri || "").replace(/\/+$/, "");
+    const tenant = cfg.cx_tenant || "";
+    if (baseAuth && tenant) return [`${baseAuth}/auth/realms/${tenant}`, null];
+    return [null, "the credential is not a Checkmarx One API key JWT, and the credential file has no cx_base_auth_uri/cx_tenant to locate the sign-in server"];
+  }
+}
+
+async function exchange(apikey, cfg) {
+  // Trade the stored credential for an access token. Returns [token, error].
+  const [iss, why] = tokenEndpoint(apikey, cfg);
+  if (!iss) return [null, why];
+  const form = new URLSearchParams({ grant_type: "refresh_token", client_id: "ast-app", refresh_token: apikey }).toString();
+  try {
+    const { body } = await httpRead(`${iss}/protocol/openid-connect/token`, { method: "POST", body: form, headers: { "Content-Type": "application/x-www-form-urlencoded" }, timeout: 30_000 });
+    return [JSON.parse(body.toString()).access_token, null];
+  } catch (e) {
+    const msg = String((e && e.cause && (e.cause.code || e.cause.message)) || e.message || e);
+    if (/CERT|certificate/i.test(msg)) die("tls_certificates", "This Node cannot verify HTTPS certificates (no CA bundle). Fix the CA bundle (NODE_EXTRA_CA_CERTS), or run the Python version: python3 ftf.py ...", { detail: msg.slice(0, 200) });
+    if (/fetch failed|ENOTFOUND|ECONNREFUSED|EAI_AGAIN|ETIMEDOUT|ECONNRESET/i.test(msg) || (e && e.name === "AbortError")) die("network", `Could not reach Checkmarx One: ${msg}`);
+    return [null, msg.slice(0, 200)];
+  }
 }
 
 class CxClient {
   static async create() {
     const c = new CxClient();
-    const apikey = process.env.CX_APIKEY || findApiKeyInCxConfig();
-    if (!apikey) die("no_credential", "No Checkmarx One API key found. Set CX_APIKEY or run: cx configure set --prop-name cx_apikey --prop-value <key>");
-    let iss;
-    try { iss = b64json(apikey.split(".")[1]).iss; } catch (e) { log(`credential is not a JWT: ${e.message}`); die("bad_credential", "CX_APIKEY does not look like a Checkmarx One API key (expected a JWT)."); }
-    const form = new URLSearchParams({ grant_type: "refresh_token", client_id: "ast-app", refresh_token: apikey }).toString();
-    let tok;
-    try {
-      const { body } = await httpRead(`${iss}/protocol/openid-connect/token`, { method: "POST", body: form, headers: { "Content-Type": "application/x-www-form-urlencoded" }, timeout: 30_000 });
-      tok = JSON.parse(body.toString()).access_token;
-    } catch (e) {
-      const msg = String((e && e.cause && (e.cause.code || e.cause.message)) || e.message || e);
-      if (/CERT|certificate/i.test(msg)) die("tls_certificates", "This Node cannot verify HTTPS certificates (no CA bundle). Fix the CA bundle (NODE_EXTRA_CA_CERTS), or run the Python version: python3 ftf.py ...", { detail: msg.slice(0, 200) });
-      if ((e && e.name === "AbortError") || /fetch failed|ENOTFOUND|ECONNREFUSED|EAI_AGAIN|ETIMEDOUT|ECONNRESET/i.test(msg)) die("network", `Could not reach Checkmarx One: ${msg}`);
-      log(`token exchange failed: ${msg}`); die("auth_failed", "Token exchange failed. The API key may be revoked or expired.");
+    const cfg = readCxConfig();
+    // Credential candidates in order. A blank CX_APIKEY is ignored, and if a set one
+    // fails the exchange, the credential file is still tried: a leftover or botched
+    // environment variable can never block a working stored credential.
+    const candidates = [];
+    const envKey = (process.env.CX_APIKEY || "").trim();
+    if (envKey) candidates.push(["CX_APIKEY", envKey]);
+    const fileKey = configApikey(cfg);
+    if (fileKey && candidates.every(([, k]) => k !== fileKey)) candidates.push(["the stored credential", fileKey]);
+    if (!candidates.length) die("no_credential", `No Checkmarx One credential found. Run this once in a terminal, then retry: ${selfAuthCommand()}`);
+    let tok = null; const failures = [];
+    for (const [source, key] of candidates) {
+      const [t, err] = await exchange(key, cfg);
+      if (t) { tok = t; c.auth_source = source; break; }
+      failures.push(`${source}: ${err}`);
+      log(`token exchange failed for ${source}: ${err}`);
     }
-    const claims = b64json(tok.split(".")[1]);
-    c.base = process.env.CX_BASE_URL || claims["ast-base-url"];
+    if (!tok) die("auth_failed", `Authentication failed (${failures.join("; ")}). Store a fresh API key by running: ${selfAuthCommand()}`);
+    let claims = {};
+    try { claims = b64json(tok.split(".")[1]); } catch (e) { claims = {}; }
+    c.base = process.env.CX_BASE_URL || claims["ast-base-url"] || (cfg.cx_base_uri || "").replace(/\/+$/, "");
     if (!c.base) die("no_base_url", "Could not determine the Checkmarx One base URL; set CX_BASE_URL.");
-    c.tenant = claims.tenant_name || claims.azp || "?";
+    c.tenant = claims.tenant_name || claims.azp || cfg.cx_tenant || "?";
     c.headers = { Authorization: `Bearer ${tok}`, Accept: "application/json; version=1.0", "Content-Type": "application/json", "User-Agent": USER_AGENT };
     return c;
   }
@@ -124,6 +175,48 @@ class CxClient {
     } finally { clearTimeout(t); }
   }
   get(p) { return this.call("GET", p); }
+}
+
+async function cmdAuth(apikey) {
+  // One-time developer setup: take an API key, verify it against the tenant, and store
+  // it in the shared Checkmarx credential file. The key is typed or piped locally; it is
+  // never passed through an assistant conversation.
+  if (!apikey) {
+    if (process.stdin.isTTY) {
+      const readline = require("readline");
+      apikey = await new Promise((resolve) => {
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+        process.stdout.write("Checkmarx One API key (input is hidden): ");
+        rl._writeToOutput = () => {};   // mute echo
+        rl.question("", (a) => { rl.close(); process.stdout.write("\n"); resolve(a.trim()); });
+      });
+    } else {
+      apikey = fs.readFileSync(0, "utf8").split(/\r?\n/)[0].trim();
+    }
+  }
+  if (!apikey) die("no_credential", "No API key entered. Create one in Checkmarx One under Settings > Identity and Access Management > API Keys, then run this again.");
+  const cfg = readCxConfig();
+  const [tok, err] = await exchange(apikey, cfg);
+  if (!tok) die("auth_failed", `That key did not authenticate: ${err}`, { hint: "Check that the key was copied whole and has not expired, then run this again." });
+  let claims = {};
+  try { claims = b64json(tok.split(".")[1]); } catch (e) { claims = {}; }
+  const tenant = claims.tenant_name || claims.azp || cfg.cx_tenant || "?";
+  const base = claims["ast-base-url"] || (cfg.cx_base_uri || "").replace(/\/+$/, "") || "?";
+  const line = `cx_apikey: ${apikey}`;
+  if (fs.existsSync(CX_CONFIG)) {
+    const lines = []; let replaced = false;
+    for (const raw of readText(CX_CONFIG, [HOME]).split(/\r?\n/)) {
+      if (!replaced && /^\s*(cx_apikey|apikey)\s*:/i.test(raw)) { lines.push(line); replaced = true; }
+      else lines.push(raw);
+    }
+    if (!replaced) lines.push(line);
+    writeText(CX_CONFIG, [HOME], lines.join("\n").replace(/\n*$/, "\n"));
+  } else {
+    mkdirp(path.dirname(CX_CONFIG));
+    writeText(CX_CONFIG, [HOME], line + "\n");
+  }
+  emit({ ok: true, tenant, base_url: base, stored_in: CX_CONFIG,
+         message: `Authentication verified against tenant '${tenant}' and saved. You're set; no environment variables needed.` });
 }
 
 // ---------------------------------------------------------------- git helpers
@@ -650,7 +743,8 @@ function parseArgs(argv) {
   const a = parseArgs(process.argv.slice(2)); const cmd = a._[0];
   const one = (k, d) => (a[k] && a[k][0]) || d;
   const many = (k, d) => (a[k] && a[k].length ? a[k] : d);
-  if (!["resolve", "remediate", "run", "stage", "test", "apply"].includes(cmd)) { process.stderr.write("usage: ftf.js resolve|remediate|run|stage|test|apply [options]\n"); process.exit(2); }
+  if (!["auth", "resolve", "remediate", "run", "stage", "test", "apply"].includes(cmd)) { process.stderr.write("usage: ftf.js auth|resolve|remediate|run|stage|test|apply [options]\n"); process.exit(2); }
+  if (cmd === "auth") { await cmdAuth(one("apikey")); return; }
   if (cmd === "test") { cmdTest(one("manifest", ".ftf/ftf-manifest.json"), one("repo_root"), many("only", [])); return; }
   if (cmd === "stage") { cmdStage(one("manifest", ".ftf/ftf-manifest.json"), a.only ? a.only[0].split(",").map(Number) : null, one("repo_root")); return; }
   if (cmd === "apply") { await cmdApply(one("manifest", ".ftf/ftf-manifest.json"), a.only ? a.only[0].split(",").map(Number) : null, one("repo_root"), !!a.overwrite); return; }
